@@ -33,8 +33,8 @@ QQ 机器人 Web 管理面板 — 通过反向 WebSocket 连接 [NapCat](https:/
 
 ```bash
 # 克隆仓库
-git clone https://github.com/yourname/QQBot.git
-cd QQBot
+git clone https://github.com/dix8/QQBot-dev.git
+cd QQBot-dev
 
 # 安装依赖
 cd server && pnpm install && cd ..
@@ -57,7 +57,7 @@ pnpm dev
 
 ```bash
 # 下载 docker-compose.yml
-wget https://raw.githubusercontent.com/dix8/QQBot-dev/main/docker-compose.yml
+wget https://raw.githubusercontent.com/dix8/QQBot-dev/master/docker-compose.yml
 
 # 启动
 docker compose up -d
