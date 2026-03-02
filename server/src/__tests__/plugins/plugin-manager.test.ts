@@ -1,0 +1,514 @@
+import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { randomUUID } from 'node:crypto';
+
+vi.mock('../../db/index.js', async () => {
+  const Database = (await import('better-sqlite3')).default;
+  const { drizzle } = await import('drizzle-orm/better-sqlite3');
+  const schema = await import('../../db/schema.js');
+
+  const sqlite = new Database(':memory:');
+  sqlite.exec(`
+    CREATE TABLE plugins (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE,
+      version TEXT NOT NULL,
+      description TEXT,
+      author TEXT,
+      entry_file TEXT NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 0,
+      priority INTEGER NOT NULL DEFAULT 100,
+      permissions TEXT NOT NULL DEFAULT '[]',
+      config_schema TEXT NOT NULL DEFAULT '[]',
+      commands TEXT NOT NULL DEFAULT '[]',
+      installed_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE plugin_config (
+      plugin_id TEXT NOT NULL,
+      key TEXT NOT NULL,
+      value TEXT NOT NULL,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (plugin_id, key)
+    );
+    CREATE TABLE logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      level TEXT NOT NULL,
+      source TEXT NOT NULL,
+      message TEXT NOT NULL,
+      details TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+  const db = drizzle(sqlite, { schema });
+
+  return { db, rawDb: sqlite, schema };
+});
+
+import { rawDb, db, schema } from '../../db/index.js';
+import { eq } from 'drizzle-orm';
+import { PluginManager } from '../../plugins/plugin-manager.js';
+import type { PluginInterface } from '../../types/plugin.js';
+
+// Create a mock logger
+function createMockLogger() {
+  return {
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+    fatal: vi.fn(),
+    trace: vi.fn(),
+    child: vi.fn().mockReturnThis(),
+    silent: vi.fn(),
+    level: 'info',
+  } as any;
+}
+
+// Helper to create a temporary plugin directory with manifest and entry file
+function createTempPlugin(opts: {
+  name: string;
+  id?: string;
+  version?: string;
+  entry?: string;
+  permissions?: string[];
+  entryContent?: string;
+}): string {
+  const dir = join(tmpdir(), `test-plugin-${randomUUID()}`);
+  mkdirSync(dir, { recursive: true });
+
+  const pluginId = opts.id ?? `qqbot_plugin_${opts.name.replace(/[^a-z0-9]/g, '_')}`;
+  const manifest = {
+    id: pluginId,
+    name: opts.name,
+    version: opts.version ?? '1.0.0',
+    entry: opts.entry ?? 'index.js',
+    permissions: opts.permissions ?? [],
+  };
+  writeFileSync(join(dir, 'manifest.json'), JSON.stringify(manifest));
+
+  const entryContent = opts.entryContent ?? `
+    export default {
+      async onLoad(ctx) {},
+      async onUnload() {},
+      async onMessage(event, cid) {},
+    };
+  `;
+  writeFileSync(join(dir, manifest.entry), entryContent);
+
+  return dir;
+}
+
+describe('PluginManager', () => {
+  let pm: PluginManager;
+  const tempDirs: string[] = [];
+
+  beforeEach(() => {
+    rawDb.exec('DELETE FROM plugins');
+    rawDb.exec('DELETE FROM plugin_config');
+    rawDb.exec('DELETE FROM logs');
+    pm = new PluginManager(createMockLogger());
+  });
+
+  // Cleanup temp dirs after all tests
+  afterEach(() => {
+    for (const dir of tempDirs) {
+      if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
+    }
+    tempDirs.length = 0;
+  });
+
+  describe('installPlugin', () => {
+    it('throws if manifest.json is missing', async () => {
+      const dir = join(tmpdir(), `test-empty-${randomUUID()}`);
+      mkdirSync(dir, { recursive: true });
+      tempDirs.push(dir);
+
+      await expect(pm.installPlugin(dir)).rejects.toThrow('manifest.json 不存在');
+    });
+
+    it('throws if manifest.json is invalid JSON', async () => {
+      const dir = join(tmpdir(), `test-badjson-${randomUUID()}`);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'manifest.json'), 'NOT JSON');
+      tempDirs.push(dir);
+
+      await expect(pm.installPlugin(dir)).rejects.toThrow('manifest.json 解析失败');
+    });
+
+    it('throws if manifest is missing required fields', async () => {
+      const dir = join(tmpdir(), `test-nofields-${randomUUID()}`);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'manifest.json'), JSON.stringify({ name: 'test' }));
+      tempDirs.push(dir);
+
+      await expect(pm.installPlugin(dir)).rejects.toThrow('缺少必要字段');
+    });
+
+    it('throws if id is missing', async () => {
+      const dir = join(tmpdir(), `test-noid-${randomUUID()}`);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'manifest.json'), JSON.stringify({ name: 'test', version: '1.0.0', entry: 'index.js' }));
+      writeFileSync(join(dir, 'index.js'), 'export default {};');
+      tempDirs.push(dir);
+
+      await expect(pm.installPlugin(dir)).rejects.toThrow('缺少必要字段 id');
+    });
+
+    it('throws if id does not start with qqbot_plugin_', async () => {
+      const dir = join(tmpdir(), `test-badprefix-${randomUUID()}`);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'manifest.json'), JSON.stringify({ id: 'my_plugin', name: 'test', version: '1.0.0', entry: 'index.js' }));
+      writeFileSync(join(dir, 'index.js'), 'export default {};');
+      tempDirs.push(dir);
+
+      await expect(pm.installPlugin(dir)).rejects.toThrow('必须以 "qqbot_plugin_" 开头');
+    });
+
+    it('throws if id contains invalid characters', async () => {
+      const dir = join(tmpdir(), `test-badid-${randomUUID()}`);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'manifest.json'), JSON.stringify({ id: 'qqbot_plugin_My-Plugin!', name: 'test', version: '1.0.0', entry: 'index.js' }));
+      writeFileSync(join(dir, 'index.js'), 'export default {};');
+      tempDirs.push(dir);
+
+      await expect(pm.installPlugin(dir)).rejects.toThrow('只能包含小写字母、数字和下划线');
+    });
+
+    it('throws if entry file does not exist', async () => {
+      const dir = join(tmpdir(), `test-noentry-${randomUUID()}`);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(
+        join(dir, 'manifest.json'),
+        JSON.stringify({ id: 'qqbot_plugin_test_noentry', name: 'test', version: '1.0.0', entry: 'missing.js' }),
+      );
+      tempDirs.push(dir);
+
+      await expect(pm.installPlugin(dir)).rejects.toThrow('入口文件不存在');
+    });
+
+    it('installs a valid plugin and returns info', async () => {
+      const dir = createTempPlugin({ name: 'test-install' });
+      tempDirs.push(dir);
+
+      const info = await pm.installPlugin(dir);
+      expect(info.name).toBe('test-install');
+      expect(info.version).toBe('1.0.0');
+      expect(info.enabled).toBe(false);
+      expect(info.priority).toBe(100);
+      expect(info.builtin).toBe(false);
+    });
+
+    it('updates an existing plugin with the same id', async () => {
+      const dir1 = createTempPlugin({ name: 'test-update', id: 'qqbot_plugin_test_update', version: '1.0.0' });
+      tempDirs.push(dir1);
+      const info1 = await pm.installPlugin(dir1);
+
+      const dir2 = createTempPlugin({ name: 'test-update', id: 'qqbot_plugin_test_update', version: '2.0.0' });
+      tempDirs.push(dir2);
+      const info2 = await pm.installPlugin(dir2);
+
+      expect(info2.id).toBe(info1.id);
+      expect(info2.version).toBe('2.0.0');
+    });
+
+    it('stores commands from manifest and returns them in info', async () => {
+      const dir = join(tmpdir(), `test-cmds-${randomUUID()}`);
+      mkdirSync(dir, { recursive: true });
+      tempDirs.push(dir);
+
+      const manifest = {
+        id: 'qqbot_plugin_test_commands',
+        name: 'test-commands',
+        version: '1.0.0',
+        entry: 'index.js',
+        commands: [
+          { command: '/ping', description: 'Pong', permission: 'all' },
+          { command: '/ban', description: 'Ban user', usage: '/ban <qq>', permission: 'master' },
+        ],
+      };
+      writeFileSync(join(dir, 'manifest.json'), JSON.stringify(manifest));
+      writeFileSync(join(dir, 'index.js'), 'export default {};');
+
+      const info = await pm.installPlugin(dir);
+      expect(info.commands).toHaveLength(2);
+      expect(info.commands[0].command).toBe('/ping');
+      expect(info.commands[1].permission).toBe('master');
+    });
+
+    it('filters invalid commands from manifest', async () => {
+      const dir = join(tmpdir(), `test-badcmds-${randomUUID()}`);
+      mkdirSync(dir, { recursive: true });
+      tempDirs.push(dir);
+
+      const manifest = {
+        id: 'qqbot_plugin_test_bad_commands',
+        name: 'test-bad-commands',
+        version: '1.0.0',
+        entry: 'index.js',
+        commands: [
+          { command: '/ok', description: 'Valid', permission: 'all' },
+          { command: '', description: 'Missing command', permission: 'all' },
+          { command: '/bad', description: 'Bad perm', permission: 'invalid' },
+        ],
+      };
+      writeFileSync(join(dir, 'manifest.json'), JSON.stringify(manifest));
+      writeFileSync(join(dir, 'index.js'), 'export default {};');
+
+      const info = await pm.installPlugin(dir);
+      expect(info.commands).toHaveLength(1);
+      expect(info.commands[0].command).toBe('/ok');
+    });
+  });
+
+  describe('enable / disable', () => {
+    it('enables a plugin and updates DB', async () => {
+      const dir = createTempPlugin({ name: 'test-enable' });
+      tempDirs.push(dir);
+      const info = await pm.installPlugin(dir);
+
+      await pm.enablePlugin(info.id);
+      const updated = pm.getPluginInfo(info.id);
+      expect(updated?.enabled).toBe(true);
+    });
+
+    it('disables a plugin and updates DB', async () => {
+      const dir = createTempPlugin({ name: 'test-disable' });
+      tempDirs.push(dir);
+      const info = await pm.installPlugin(dir);
+      await pm.enablePlugin(info.id);
+      await pm.disablePlugin(info.id);
+
+      const updated = pm.getPluginInfo(info.id);
+      expect(updated?.enabled).toBe(false);
+    });
+
+    it('throws when trying to enable a builtin plugin', async () => {
+      const mockPlugin: PluginInterface = {};
+      pm.registerBuiltinPlugin('builtin-1', 'Built-in', mockPlugin);
+
+      await expect(pm.enablePlugin('builtin-1')).rejects.toThrow('内置插件不可操作');
+    });
+
+    it('throws when trying to disable a builtin plugin', async () => {
+      const mockPlugin: PluginInterface = {};
+      pm.registerBuiltinPlugin('builtin-2', 'Built-in', mockPlugin);
+
+      await expect(pm.disablePlugin('builtin-2')).rejects.toThrow('内置插件不可禁用');
+    });
+  });
+
+  describe('deletePlugin', () => {
+    it('deletes a plugin from DB and cleans up config', async () => {
+      const dir = createTempPlugin({ name: 'test-delete', permissions: ['getConfig', 'setConfig'] });
+      tempDirs.push(dir);
+      const info = await pm.installPlugin(dir);
+
+      // Add some plugin config
+      db.insert(schema.pluginConfig)
+        .values({ pluginId: info.id, key: 'testKey', value: '"testValue"' })
+        .run();
+
+      await pm.deletePlugin(info.id);
+
+      expect(pm.getPluginInfo(info.id)).toBeUndefined();
+
+      // Config should be cleaned up
+      const configRows = db.select()
+        .from(schema.pluginConfig)
+        .where(eq(schema.pluginConfig.pluginId, info.id))
+        .all();
+      expect(configRows).toHaveLength(0);
+    });
+
+    it('throws when trying to delete a builtin plugin', async () => {
+      const mockPlugin: PluginInterface = {};
+      pm.registerBuiltinPlugin('builtin-del', 'Built-in', mockPlugin);
+
+      await expect(pm.deletePlugin('builtin-del')).rejects.toThrow('内置插件不可删除');
+    });
+  });
+
+  describe('updatePriority', () => {
+    it('updates plugin priority in DB', async () => {
+      const dir = createTempPlugin({ name: 'test-priority' });
+      tempDirs.push(dir);
+      const info = await pm.installPlugin(dir);
+
+      pm.updatePriority(info.id, 50);
+      const updated = pm.getPluginInfo(info.id);
+      expect(updated?.priority).toBe(50);
+    });
+
+    it('throws for builtin plugins', () => {
+      const mockPlugin: PluginInterface = {};
+      pm.registerBuiltinPlugin('builtin-prio', 'Built-in', mockPlugin);
+
+      expect(() => pm.updatePriority('builtin-prio', 10)).toThrow('内置插件优先级不可修改');
+    });
+  });
+
+  describe('getAllPlugins / getPluginInfo', () => {
+    it('returns builtin plugins first', async () => {
+      const mockPlugin: PluginInterface = {};
+      pm.registerBuiltinPlugin('sys', '系统', mockPlugin, 0);
+
+      const dir = createTempPlugin({ name: 'user-plugin' });
+      tempDirs.push(dir);
+      await pm.installPlugin(dir);
+
+      const all = pm.getAllPlugins();
+      expect(all.length).toBe(2);
+      expect(all[0].builtin).toBe(true);
+      expect(all[1].builtin).toBe(false);
+    });
+
+    it('returns undefined for non-existent plugin', () => {
+      expect(pm.getPluginInfo('non-existent')).toBeUndefined();
+    });
+
+    it('returns builtin plugin info', () => {
+      const mockPlugin: PluginInterface = {};
+      pm.registerBuiltinPlugin('sys', '系统', mockPlugin, 0);
+
+      const info = pm.getPluginInfo('sys');
+      expect(info).toBeDefined();
+      expect(info!.builtin).toBe(true);
+      expect(info!.name).toBe('系统');
+    });
+  });
+
+  describe('dispatchMessage — priority + error isolation', () => {
+    it('dispatches to plugins in priority order', async () => {
+      const order: string[] = [];
+      const pluginA: PluginInterface = {
+        onMessage: async () => { order.push('A'); },
+      };
+      const pluginB: PluginInterface = {
+        onMessage: async () => { order.push('B'); },
+      };
+
+      pm.registerBuiltinPlugin('a', 'PluginA', pluginA, 10);
+      pm.registerBuiltinPlugin('b', 'PluginB', pluginB, 5);
+
+      const event = {
+        post_type: 'message',
+        message_type: 'private',
+        user_id: 123,
+        message: 'hi',
+        raw_message: 'hi',
+        self_id: 100,
+        time: Date.now(),
+        sub_type: 'friend',
+        message_id: 1,
+        font: 0,
+        sender: { user_id: 123, nickname: 'test' },
+      } as any;
+
+      await pm.dispatchMessage(event, 'conn-1');
+      // B has lower priority number → executes first
+      expect(order).toEqual(['B', 'A']);
+    });
+
+    it('isolates plugin errors — other plugins still execute', async () => {
+      const executed: string[] = [];
+      const pluginOk: PluginInterface = {
+        onMessage: async () => { executed.push('ok'); },
+      };
+      const pluginFail: PluginInterface = {
+        onMessage: async () => { throw new Error('boom'); },
+      };
+
+      pm.registerBuiltinPlugin('fail', 'Fail', pluginFail, 1);
+      pm.registerBuiltinPlugin('ok', 'Ok', pluginOk, 2);
+
+      const event = {
+        post_type: 'message',
+        message_type: 'private',
+        user_id: 123,
+        message: 'hi',
+        raw_message: 'hi',
+        self_id: 100,
+        time: Date.now(),
+        sub_type: 'friend',
+        message_id: 1,
+        font: 0,
+        sender: { user_id: 123, nickname: 'test' },
+      } as any;
+
+      await pm.dispatchMessage(event, 'conn-1');
+      expect(executed).toEqual(['ok']);
+    });
+  });
+
+  describe('plugin config (getConfig / setConfig)', () => {
+    it('stores and retrieves config via Drizzle', () => {
+      // Directly test DB operations (since createContext is private, test via DB)
+      const pluginId = 'cfg-test-plugin';
+      const key = 'greeting';
+      const value = JSON.stringify({ text: 'hello' });
+      const now = new Date().toISOString();
+
+      db.insert(schema.pluginConfig)
+        .values({ pluginId, key, value, updatedAt: now })
+        .run();
+
+      const row = db.select()
+        .from(schema.pluginConfig)
+        .where(eq(schema.pluginConfig.pluginId, pluginId))
+        .get();
+
+      expect(row).toBeDefined();
+      expect(JSON.parse(row!.value)).toEqual({ text: 'hello' });
+    });
+
+    it('upserts config on conflict', () => {
+      const pluginId = 'cfg-upsert';
+      const key = 'counter';
+      const now = new Date().toISOString();
+
+      db.insert(schema.pluginConfig)
+        .values({ pluginId, key, value: '1', updatedAt: now })
+        .run();
+
+      db.insert(schema.pluginConfig)
+        .values({ pluginId, key, value: '2', updatedAt: now })
+        .onConflictDoUpdate({
+          target: [schema.pluginConfig.pluginId, schema.pluginConfig.key],
+          set: { value: '2', updatedAt: now },
+        })
+        .run();
+
+      const rows = db.select()
+        .from(schema.pluginConfig)
+        .where(eq(schema.pluginConfig.pluginId, pluginId))
+        .all();
+
+      expect(rows).toHaveLength(1);
+      expect(rows[0].value).toBe('2');
+    });
+
+    it('deletes config when plugin is deleted', async () => {
+      const dir = createTempPlugin({ name: 'cfg-cleanup' });
+      tempDirs.push(dir);
+      const info = await pm.installPlugin(dir);
+
+      db.insert(schema.pluginConfig)
+        .values({ pluginId: info.id, key: 'k1', value: '"v1"' })
+        .run();
+      db.insert(schema.pluginConfig)
+        .values({ pluginId: info.id, key: 'k2', value: '"v2"' })
+        .run();
+
+      await pm.deletePlugin(info.id);
+
+      const remaining = db.select()
+        .from(schema.pluginConfig)
+        .where(eq(schema.pluginConfig.pluginId, info.id))
+        .all();
+      expect(remaining).toHaveLength(0);
+    });
+  });
+});

@@ -1,0 +1,1 @@
+ALTER TABLE `plugins` ADD `commands` text DEFAULT '[]' NOT NULL;

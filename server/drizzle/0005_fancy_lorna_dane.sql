@@ -1,0 +1,1 @@
+ALTER TABLE `bots` ADD `sent_message_count` integer DEFAULT 0 NOT NULL;

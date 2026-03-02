@@ -1,0 +1,55 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1772204673452,
+      "tag": "0000_plain_paladin",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1772216339530,
+      "tag": "0001_illegal_jocasta",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1772275912397,
+      "tag": "0002_lumpy_magneto",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1772380800000,
+      "tag": "0003_add_plugin_config_schema",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1772467200000,
+      "tag": "0004_add_commands_column",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1772377631195,
+      "tag": "0005_fancy_lorna_dane",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1772553600000,
+      "tag": "0006_add_repo_column",
+      "breakpoints": true
+    }
+  ]
+}

@@ -1,0 +1,641 @@
+import { mkdirSync, existsSync, rmSync, cpSync, readFileSync, readdirSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import type { FastifyBaseLogger } from 'fastify';
+import { db, schema } from '../db/index.js';
+import { eq, and, asc } from 'drizzle-orm';
+import { logService } from '../services/log.js';
+import { nowISO } from '../utils/date.js';
+import { env } from '../config/env.js';
+import type {
+  PluginManifest,
+  PluginInterface,
+  PluginContext,
+  PluginLogger,
+  PluginInfo,
+  PluginPermission,
+  PluginConfigItem,
+  PluginCommand,
+} from '../types/plugin.js';
+import { detectCommands, mergeCommands } from './command-detector.js';
+import type { MessageEvent, NoticeEvent, RequestEvent } from '../types/onebot.js';
+import type { OneBotClient } from '../ws/onebot-client.js';
+import type { ConnectionManager } from '../ws/connection-manager.js';
+
+const MAX_CONSECUTIVE_ERRORS = 5;
+
+interface LoadedPlugin {
+  id: string;
+  name: string;
+  instance: PluginInterface;
+  priority: number;
+  errorCount: number;
+}
+
+export class PluginManager {
+  private loaded = new Map<string, LoadedPlugin>();
+  private builtinPlugins = new Map<string, LoadedPlugin>();
+  private disablingSet = new Set<string>();
+  private logger: FastifyBaseLogger;
+  private oneBotClient?: OneBotClient;
+  private connectionManager?: ConnectionManager;
+
+  constructor(logger: FastifyBaseLogger) {
+    this.logger = logger;
+    mkdirSync(env.PLUGINS_DIR, { recursive: true });
+  }
+
+  /** Register a built-in plugin (call before initialize) */
+  registerBuiltinPlugin(id: string, name: string, instance: PluginInterface, priority: number = 0): void {
+    const plugin: LoadedPlugin = { id, name, instance, priority, errorCount: 0 };
+    this.builtinPlugins.set(id, plugin);
+    this.loaded.set(id, plugin);
+    this.logger.info({ pluginId: id, name }, 'Built-in plugin registered');
+    logService.addLog('info', 'plugin', `内置插件已注册: ${name}`);
+  }
+
+  setOneBotClient(client: OneBotClient): void {
+    this.oneBotClient = client;
+  }
+
+  setConnectionManager(cm: ConnectionManager): void {
+    this.connectionManager = cm;
+  }
+
+  /** Install preinstalled plugins (once per plugin, respects user deletion) */
+  async installPreinstalledPlugins(): Promise<void> {
+    const currentFile = fileURLToPath(import.meta.url);
+    const preinstalledDir = join(resolve(currentFile, '..'), 'preinstalled');
+    if (!existsSync(preinstalledDir)) return;
+
+    let entries: string[];
+    try {
+      entries = readdirSync(preinstalledDir, { withFileTypes: true })
+        .filter((d) => d.isDirectory())
+        .map((d) => d.name);
+    } catch {
+      return;
+    }
+
+    for (const dirName of entries) {
+      const pluginSrcDir = join(preinstalledDir, dirName);
+      const manifestPath = join(pluginSrcDir, 'manifest.json');
+      if (!existsSync(manifestPath)) continue;
+
+      let manifest: { name?: string };
+      try {
+        manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
+      } catch {
+        this.logger.warn({ dirName }, 'Failed to parse preinstalled plugin manifest');
+        continue;
+      }
+
+      if (!manifest.name) continue;
+
+      const markerKey = `preinstalled:${manifest.name}`;
+      const existing = db.select()
+        .from(schema.botConfig)
+        .where(eq(schema.botConfig.key, markerKey))
+        .get();
+
+      if (existing) {
+        // Already installed (or user deleted it) — skip
+        continue;
+      }
+
+      try {
+        await this.installPlugin(pluginSrcDir);
+        db.insert(schema.botConfig)
+          .values({ key: markerKey, value: 'installed', updatedAt: nowISO() })
+          .run();
+        this.logger.info({ name: manifest.name }, 'Preinstalled plugin installed');
+        logService.addLog('info', 'plugin', `预装插件已安装: ${manifest.name}`);
+      } catch (err) {
+        this.logger.error({ err, name: manifest.name }, 'Failed to install preinstalled plugin');
+        logService.addLog('error', 'plugin', `预装插件安装失败: ${manifest.name}`, String(err));
+      }
+    }
+  }
+
+  async initialize(): Promise<void> {
+    const rows = db.select()
+      .from(schema.plugins)
+      .where(eq(schema.plugins.enabled, 1))
+      .all();
+
+    for (const row of rows) {
+      try {
+        await this.loadPlugin(row.id);
+      } catch (err) {
+        this.logger.error({ err, pluginId: row.id }, 'Failed to load plugin on startup');
+        logService.addLog('error', 'plugin', `插件加载失败: ${row.name}`, String(err));
+      }
+    }
+  }
+
+  async installPlugin(extractedDir: string): Promise<PluginInfo> {
+    const manifestPath = join(extractedDir, 'manifest.json');
+    if (!existsSync(manifestPath)) {
+      throw new Error('manifest.json 不存在');
+    }
+
+    let manifest: PluginManifest;
+    try {
+      manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
+    } catch {
+      throw new Error('manifest.json 解析失败');
+    }
+
+    if (!manifest.name || !manifest.version || !manifest.entry) {
+      throw new Error('manifest.json 缺少必要字段 (name, version, entry)');
+    }
+
+    if (!manifest.id) {
+      throw new Error('manifest.json 缺少必要字段 id');
+    }
+
+    const PLUGIN_ID_PREFIX = 'qqbot_plugin_';
+    if (!manifest.id.startsWith(PLUGIN_ID_PREFIX)) {
+      throw new Error(`插件 id 必须以 "${PLUGIN_ID_PREFIX}" 开头，当前值: ${manifest.id}`);
+    }
+
+    if (!/^[a-z0-9_]+$/.test(manifest.id)) {
+      throw new Error('插件 id 只能包含小写字母、数字和下划线');
+    }
+
+    const VALID_PERMISSIONS: Set<string> = new Set(['sendMessage', 'callApi', 'getConfig', 'setConfig']);
+    const permissions: PluginPermission[] = (manifest.permissions ?? []).filter((p: string) => {
+      if (!VALID_PERMISSIONS.has(p)) {
+        this.logger.warn({ pluginName: manifest.name, permission: p }, 'Unknown plugin permission ignored');
+        return false;
+      }
+      return true;
+    }) as PluginPermission[];
+
+    const entryPath = join(extractedDir, manifest.entry);
+    if (!resolve(entryPath).startsWith(resolve(extractedDir))) {
+      throw new Error('插件入口文件路径非法');
+    }
+    if (!existsSync(entryPath)) {
+      throw new Error(`入口文件不存在: ${manifest.entry}`);
+    }
+
+    // Validate configSchema
+    const VALID_CONFIG_TYPES = new Set(['string', 'number', 'boolean', 'select']);
+    const configSchema: PluginConfigItem[] = (manifest.configSchema ?? []).filter((item) => {
+      if (!item.key || !item.label || !VALID_CONFIG_TYPES.has(item.type)) {
+        this.logger.warn({ pluginName: manifest.name, item }, 'Invalid configSchema item ignored');
+        return false;
+      }
+      return true;
+    });
+
+    // Validate commands
+    const VALID_CMD_PERMISSIONS = new Set(['all', 'master']);
+    const commands: PluginCommand[] = (manifest.commands ?? []).filter((cmd) => {
+      if (!cmd.command || !VALID_CMD_PERMISSIONS.has(cmd.permission)) {
+        this.logger.warn({ pluginName: manifest.name, cmd }, 'Invalid command item ignored');
+        return false;
+      }
+      return true;
+    });
+
+    // Auto-detect commands from entry file source code
+    const entrySource = readFileSync(entryPath, 'utf-8');
+    const detected = detectCommands(entrySource);
+    const finalCommands = mergeCommands(commands, detected);
+
+    // Check if plugin already exists (by manifest id)
+    const existing = db.select({ id: schema.plugins.id })
+      .from(schema.plugins)
+      .where(eq(schema.plugins.id, manifest.id))
+      .get();
+
+    const pluginId = manifest.id;
+    const pluginDir = join(env.PLUGINS_DIR, pluginId);
+
+    // If updating, unload first
+    if (existing) {
+      await this.unloadPlugin(existing.id);
+      rmSync(pluginDir, { recursive: true, force: true });
+    }
+
+    // Copy files to plugin directory
+    cpSync(extractedDir, pluginDir, { recursive: true });
+
+    const now = nowISO();
+    if (existing) {
+      db.update(schema.plugins)
+        .set({
+          version: manifest.version,
+          description: manifest.description ?? null,
+          author: manifest.author ?? null,
+          repo: manifest.repo ?? null,
+          entryFile: manifest.entry,
+          permissions: JSON.stringify(permissions),
+          configSchema: JSON.stringify(configSchema),
+          commands: JSON.stringify(finalCommands),
+          updatedAt: now,
+        })
+        .where(eq(schema.plugins.id, pluginId))
+        .run();
+    } else {
+      db.insert(schema.plugins)
+        .values({
+          id: pluginId,
+          name: manifest.name,
+          version: manifest.version,
+          description: manifest.description ?? null,
+          author: manifest.author ?? null,
+          repo: manifest.repo ?? null,
+          entryFile: manifest.entry,
+          enabled: 0,
+          priority: 100,
+          permissions: JSON.stringify(permissions),
+          configSchema: JSON.stringify(configSchema),
+          commands: JSON.stringify(finalCommands),
+          installedAt: now,
+          updatedAt: now,
+        })
+        .run();
+    }
+
+    logService.addLog('info', 'plugin', `插件已安装: ${manifest.name} v${manifest.version}`);
+    return this.getPluginInfo(pluginId)!;
+  }
+
+  async loadPlugin(id: string): Promise<void> {
+    if (this.loaded.has(id)) return;
+
+    const record = db.select().from(schema.plugins).where(eq(schema.plugins.id, id)).get();
+    if (!record) throw new Error(`插件不存在: ${id}`);
+
+    const pluginDir = join(env.PLUGINS_DIR, id);
+    const entryPath = join(pluginDir, record.entryFile);
+    if (!resolve(entryPath).startsWith(resolve(pluginDir))) {
+      throw new Error('插件入口文件路径非法');
+    }
+    if (!existsSync(entryPath)) {
+      throw new Error(`插件入口文件不存在: ${entryPath}`);
+    }
+
+    const entryUrl = pathToFileURL(entryPath).href;
+    const mod = await import(entryUrl);
+    const instance: PluginInterface = mod.default ?? mod;
+
+    const permissions: PluginPermission[] = JSON.parse(record.permissions || '[]');
+    const context = this.createContext(id, record.name, permissions);
+
+    if (instance.onLoad) {
+      await instance.onLoad(context);
+    }
+
+    this.loaded.set(id, {
+      id,
+      name: record.name,
+      instance,
+      priority: record.priority,
+      errorCount: 0,
+    });
+
+    this.logger.info({ pluginId: id, name: record.name }, 'Plugin loaded');
+    logService.addLog('info', 'plugin', `插件已加载: ${record.name}`);
+  }
+
+  async unloadPlugin(id: string): Promise<void> {
+    const plugin = this.loaded.get(id);
+    if (!plugin) return;
+
+    try {
+      if (plugin.instance.onUnload) {
+        await plugin.instance.onUnload();
+      }
+    } catch (err) {
+      this.logger.error({ err, pluginId: id }, 'Error during plugin unload');
+    }
+
+    this.loaded.delete(id);
+    this.logger.info({ pluginId: id }, 'Plugin unloaded');
+  }
+
+  async enablePlugin(id: string): Promise<void> {
+    if (this.builtinPlugins.has(id)) throw new Error('内置插件不可操作');
+    db.update(schema.plugins)
+      .set({ enabled: 1, updatedAt: nowISO() })
+      .where(eq(schema.plugins.id, id))
+      .run();
+    await this.loadPlugin(id);
+    logService.addLog('info', 'plugin', `插件已启用: ${id}`);
+  }
+
+  async disablePlugin(id: string): Promise<void> {
+    if (this.builtinPlugins.has(id)) throw new Error('内置插件不可禁用');
+    db.update(schema.plugins)
+      .set({ enabled: 0, updatedAt: nowISO() })
+      .where(eq(schema.plugins.id, id))
+      .run();
+    await this.unloadPlugin(id);
+    logService.addLog('info', 'plugin', `插件已禁用: ${id}`);
+  }
+
+  async deletePlugin(id: string): Promise<void> {
+    if (this.builtinPlugins.has(id)) throw new Error('内置插件不可删除');
+    await this.unloadPlugin(id);
+    db.delete(schema.plugins).where(eq(schema.plugins.id, id)).run();
+    db.delete(schema.pluginConfig).where(eq(schema.pluginConfig.pluginId, id)).run();
+    const pluginDir = join(env.PLUGINS_DIR, id);
+    rmSync(pluginDir, { recursive: true, force: true });
+    logService.addLog('info', 'plugin', `插件已删除: ${id}`);
+  }
+
+  updatePriority(id: string, priority: number): void {
+    if (this.builtinPlugins.has(id)) throw new Error('内置插件优先级不可修改');
+    db.update(schema.plugins)
+      .set({ priority, updatedAt: nowISO() })
+      .where(eq(schema.plugins.id, id))
+      .run();
+    const plugin = this.loaded.get(id);
+    if (plugin) {
+      plugin.priority = priority;
+    }
+  }
+
+  async dispatchMessage(event: MessageEvent, connectionId: string): Promise<void> {
+    const plugins = this.getSortedPlugins();
+    for (const plugin of plugins) {
+      if (!plugin.instance.onMessage) continue;
+      try {
+        await plugin.instance.onMessage(event, connectionId);
+        plugin.errorCount = 0;
+      } catch (err) {
+        this.handlePluginError(plugin, err);
+      }
+    }
+  }
+
+  async dispatchNotice(event: NoticeEvent, connectionId: string): Promise<void> {
+    const plugins = this.getSortedPlugins();
+    for (const plugin of plugins) {
+      if (!plugin.instance.onNotice) continue;
+      try {
+        await plugin.instance.onNotice(event, connectionId);
+        plugin.errorCount = 0;
+      } catch (err) {
+        this.handlePluginError(plugin, err);
+      }
+    }
+  }
+
+  async dispatchRequest(event: RequestEvent, connectionId: string): Promise<void> {
+    const plugins = this.getSortedPlugins();
+    for (const plugin of plugins) {
+      if (!plugin.instance.onRequest) continue;
+      try {
+        await plugin.instance.onRequest(event, connectionId);
+        plugin.errorCount = 0;
+      } catch (err) {
+        this.handlePluginError(plugin, err);
+      }
+    }
+  }
+
+  getAllPlugins(): PluginInfo[] {
+    const builtinInfos: PluginInfo[] = Array.from(this.builtinPlugins.values()).map((p) => ({
+      id: p.id,
+      name: p.name,
+      version: '1.0.0',
+      description: '系统内置插件',
+      author: 'System',
+      repo: null,
+      enabled: true,
+      priority: p.priority,
+      loaded: true,
+      errorCount: p.errorCount,
+      installedAt: '',
+      updatedAt: '',
+      builtin: true,
+      hasIcon: false,
+      hasReadme: false,
+      commands: p.instance.getCommands?.() ?? [],
+      permissions: [] as PluginPermission[],
+      configSchema: [] as PluginConfigItem[],
+    }));
+    const rows = db.select()
+      .from(schema.plugins)
+      .orderBy(asc(schema.plugins.priority))
+      .all();
+    const userInfos = rows.map((r) => this.recordToInfo(r));
+    return [...builtinInfos, ...userInfos];
+  }
+
+  getPluginInfo(id: string): PluginInfo | undefined {
+    const builtin = this.builtinPlugins.get(id);
+    if (builtin) {
+      return {
+        id: builtin.id,
+        name: builtin.name,
+        version: '1.0.0',
+        description: '系统内置插件',
+        author: 'System',
+        repo: null,
+        enabled: true,
+        priority: builtin.priority,
+        loaded: true,
+        errorCount: builtin.errorCount,
+        installedAt: '',
+        updatedAt: '',
+        builtin: true,
+        hasIcon: false,
+        hasReadme: false,
+        commands: builtin.instance.getCommands?.() ?? [],
+        permissions: [],
+        configSchema: [],
+      };
+    }
+    const row = db.select().from(schema.plugins).where(eq(schema.plugins.id, id)).get();
+    if (!row) return undefined;
+    return this.recordToInfo(row);
+  }
+
+  async unloadAll(): Promise<void> {
+    for (const id of this.loaded.keys()) {
+      await this.unloadPlugin(id);
+    }
+  }
+
+  private getSortedPlugins(): LoadedPlugin[] {
+    return Array.from(this.loaded.values()).sort((a, b) => a.priority - b.priority);
+  }
+
+  private handlePluginError(plugin: LoadedPlugin, err: unknown): void {
+    plugin.errorCount++;
+    this.logger.error({ err, pluginId: plugin.id, errorCount: plugin.errorCount }, 'Plugin error');
+    logService.addLog('error', 'plugin', `插件错误 [${plugin.name}]: ${String(err)}`);
+
+    if (plugin.errorCount >= MAX_CONSECUTIVE_ERRORS && !this.builtinPlugins.has(plugin.id)) {
+      if (this.disablingSet.has(plugin.id)) return;
+      this.disablingSet.add(plugin.id);
+      this.logger.warn({ pluginId: plugin.id }, 'Plugin exceeded max errors, disabling');
+      logService.addLog('warn', 'plugin', `插件连续错误过多，已自动禁用: ${plugin.name}`);
+      this.disablePlugin(plugin.id)
+        .catch((e) => this.logger.error({ err: e, pluginId: plugin.id }, 'Failed to auto-disable plugin'))
+        .finally(() => this.disablingSet.delete(plugin.id));
+    }
+  }
+
+  private createContext(pluginId: string, pluginName: string, permissions: PluginPermission[] = []): PluginContext {
+    const pluginLogger: PluginLogger = {
+      debug: (msg) => logService.addLog('debug', 'plugin', `[${pluginName}] ${msg}`),
+      info: (msg) => logService.addLog('info', 'plugin', `[${pluginName}] ${msg}`),
+      warn: (msg) => logService.addLog('warn', 'plugin', `[${pluginName}] ${msg}`),
+      error: (msg) => logService.addLog('error', 'plugin', `[${pluginName}] ${msg}`),
+    };
+
+    const dataDir = join(env.PLUGINS_DIR, pluginId, 'data');
+    mkdirSync(dataDir, { recursive: true });
+
+    const permSet = new Set(permissions);
+
+    const requirePermission = (perm: PluginPermission) => {
+      if (!permSet.has(perm)) {
+        const err = `插件 [${pluginName}] 未声明权限: ${perm}`;
+        pluginLogger.error(err);
+        throw new Error(err);
+      }
+    };
+
+    return {
+      sendMessage: async (type, target, message) => {
+        requirePermission('sendMessage');
+        if (!this.oneBotClient || !this.connectionManager) {
+          throw new Error('Bot 未连接');
+        }
+        const connections = this.connectionManager.getAllConnections();
+        const activeConn = connections.find((c) => c.state === 'authenticated');
+        if (!activeConn) throw new Error('没有可用的 Bot 连接');
+
+        if (type === 'private') {
+          await this.oneBotClient.sendPrivateMsg(activeConn.id, target, message, pluginName);
+        } else {
+          await this.oneBotClient.sendGroupMsg(activeConn.id, target, message, pluginName);
+        }
+      },
+      callApi: async (action, params = {}) => {
+        requirePermission('callApi');
+        if (!this.oneBotClient || !this.connectionManager) {
+          throw new Error('Bot 未连接');
+        }
+        const connections = this.connectionManager.getAllConnections();
+        const activeConn = connections.find((c) => c.state === 'authenticated');
+        if (!activeConn) throw new Error('没有可用的 Bot 连接');
+
+        return this.oneBotClient.callApi(activeConn.id, action, params, pluginName);
+      },
+      getConfig: (key) => {
+        requirePermission('getConfig');
+        const row = db.select()
+          .from(schema.pluginConfig)
+          .where(and(
+            eq(schema.pluginConfig.pluginId, pluginId),
+            eq(schema.pluginConfig.key, key),
+          ))
+          .get();
+        if (!row) return undefined;
+        try {
+          return JSON.parse(row.value);
+        } catch {
+          return row.value;
+        }
+      },
+      setConfig: (key, value) => {
+        requirePermission('setConfig');
+        const jsonValue = JSON.stringify(value);
+        const now = nowISO();
+        db.insert(schema.pluginConfig)
+          .values({ pluginId, key, value: jsonValue, updatedAt: now })
+          .onConflictDoUpdate({
+            target: [schema.pluginConfig.pluginId, schema.pluginConfig.key],
+            set: { value: jsonValue, updatedAt: now },
+          })
+          .run();
+      },
+      logger: pluginLogger,
+      dataDir,
+    };
+  }
+
+  private recordToInfo(record: typeof schema.plugins.$inferSelect): PluginInfo {
+    const loaded = this.loaded.get(record.id);
+    const permissions: PluginPermission[] = JSON.parse(record.permissions || '[]');
+    const configSchema: PluginConfigItem[] = JSON.parse(record.configSchema || '[]');
+    const dbCommands: PluginCommand[] = JSON.parse(record.commands || '[]');
+    // Runtime getCommands() overrides DB commands if plugin is loaded and implements it
+    const commands = loaded?.instance.getCommands?.() ?? dbCommands;
+    const pluginDir = join(env.PLUGINS_DIR, record.id);
+    const iconPath = join(pluginDir, 'icon.png');
+    const readmePath = join(pluginDir, 'README.md');
+    return {
+      id: record.id,
+      name: record.name,
+      version: record.version,
+      description: record.description,
+      author: record.author,
+      repo: record.repo ?? null,
+      enabled: record.enabled === 1,
+      priority: record.priority,
+      loaded: !!loaded,
+      errorCount: loaded?.errorCount ?? 0,
+      installedAt: record.installedAt,
+      updatedAt: record.updatedAt,
+      builtin: false,
+      hasIcon: existsSync(iconPath),
+      hasReadme: existsSync(readmePath),
+      commands,
+      permissions,
+      configSchema,
+    };
+  }
+
+  /** Get the plugin directory path on disk */
+  getPluginDir(pluginId: string): string {
+    return join(env.PLUGINS_DIR, pluginId);
+  }
+
+  getPluginConfigValues(pluginId: string): Record<string, unknown> {
+    const rows = db.select()
+      .from(schema.pluginConfig)
+      .where(eq(schema.pluginConfig.pluginId, pluginId))
+      .all();
+    const values: Record<string, unknown> = {};
+    for (const row of rows) {
+      try {
+        values[row.key] = JSON.parse(row.value);
+      } catch {
+        values[row.key] = row.value;
+      }
+    }
+    return values;
+  }
+
+  setPluginConfigValues(pluginId: string, values: Record<string, unknown>): void {
+    const record = db.select().from(schema.plugins).where(eq(schema.plugins.id, pluginId)).get();
+    if (!record) throw new Error('插件不存在');
+
+    const configSchema: PluginConfigItem[] = JSON.parse(record.configSchema || '[]');
+    const validKeys = new Set(configSchema.map((item) => item.key));
+
+    const now = nowISO();
+    for (const [key, value] of Object.entries(values)) {
+      if (!validKeys.has(key)) continue;
+      const jsonValue = JSON.stringify(value);
+      db.insert(schema.pluginConfig)
+        .values({ pluginId, key, value: jsonValue, updatedAt: now })
+        .onConflictDoUpdate({
+          target: [schema.pluginConfig.pluginId, schema.pluginConfig.key],
+          set: { value: jsonValue, updatedAt: now },
+        })
+        .run();
+    }
+  }
+}

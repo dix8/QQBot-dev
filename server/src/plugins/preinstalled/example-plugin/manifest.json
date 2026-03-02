@@ -1,0 +1,49 @@
+{
+  "id": "qqbot_plugin_example",
+  "name": "示例插件",
+  "version": "1.0.0",
+  "description": "演示所有插件能力的示例插件，可自由开关或删除",
+  "author": "System",
+  "repo": "https://github.com/YourName/qqbot-plugin-example",
+  "entry": "index.js",
+  "permissions": ["sendMessage", "callApi", "getConfig", "setConfig"],
+  "commands": [
+    { "command": "/ping", "description": "回复 pong，测试 Bot 是否在线", "permission": "all" },
+    { "command": "/echo", "description": "复读消息内容", "usage": "/echo <内容>", "permission": "all" },
+    { "command": "/info", "description": "查看 Bot 基本信息", "permission": "all" },
+    { "command": "/time", "description": "查看当前时间和调用次数", "permission": "all" }
+  ],
+  "configSchema": [
+    {
+      "key": "welcomeMsg",
+      "label": "入群欢迎语",
+      "type": "string",
+      "default": "欢迎加入！",
+      "placeholder": "新成员入群时发送的消息"
+    },
+    {
+      "key": "autoApprove",
+      "label": "自动通过好友请求",
+      "type": "boolean",
+      "default": false,
+      "description": "收到好友申请时自动同意"
+    },
+    {
+      "key": "echoMode",
+      "label": "复读模式",
+      "type": "select",
+      "default": "text",
+      "options": [
+        { "label": "纯文本", "value": "text" },
+        { "label": "原样转发", "value": "raw" }
+      ]
+    },
+    {
+      "key": "maxEchoLen",
+      "label": "最大复读长度",
+      "type": "number",
+      "default": 100,
+      "description": "超过此长度的消息不复读"
+    }
+  ]
+}

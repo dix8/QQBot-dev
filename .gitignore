@@ -1,0 +1,47 @@
+# Dependencies
+node_modules
+**/node_modules
+
+# Build output
+server/dist
+web/dist
+
+# Database
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+
+# Environment
+.env
+.env.*
+!.env.example
+!server/.env.example
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Runtime data
+server/data/
+/plugins/
+
+# Project docs (internal only)
+CLAUDE.md
+QQ机器人Web管理项目需求文档.md
+
+# Reference project
+参考项目/
+
+# Claude Code
+.claude/

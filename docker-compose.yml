@@ -1,0 +1,17 @@
+services:
+  qqbot-web:
+    image: ghcr.io/dix8/qqbot-dev:latest
+    container_name: qqbot
+    # build: .  # 取消注释此行可改为本地构建
+    restart: always
+    ports:
+      - "3000:3000" # Web 管理面板端口
+      - "6199:6199" # NapCat 反向 WebSocket 端口（可按需修改）
+    environment:
+      - TZ=Asia/Shanghai
+    volumes:
+      - ./data:/app/data
+      - /etc/localtime:/etc/localtime:ro
+
+volumes:
+  qqbot-data:

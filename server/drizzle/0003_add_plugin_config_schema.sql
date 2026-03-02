@@ -1,0 +1,1 @@
+ALTER TABLE `plugins` ADD `config_schema` text DEFAULT '[]' NOT NULL;
