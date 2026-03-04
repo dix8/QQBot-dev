@@ -25,6 +25,7 @@ COPY server/package.json server/pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile --prod
 
 COPY --from=server-build /app/server/dist ./dist
+COPY --from=server-build /app/server/src/plugins/preinstalled ./dist/plugins/preinstalled
 COPY --from=server-build /app/server/drizzle ./drizzle
 COPY --from=web-build /app/web/dist ./public
 

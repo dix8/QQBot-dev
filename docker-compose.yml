@@ -1,3 +1,5 @@
+name: qqbot
+
 services:
   qqbot-web:
     image: ghcr.io/dix8/qqbot-dev:latest
@@ -10,8 +12,5 @@ services:
     environment:
       - TZ=Asia/Shanghai
     volumes:
-      - ./data:/app/data
+      - ./qqbot-data:/app/data
       - /etc/localtime:/etc/localtime:ro
-
-volumes:
-  qqbot-data:
