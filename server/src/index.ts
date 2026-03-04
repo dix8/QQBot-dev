@@ -1,8 +1,9 @@
 import 'dotenv/config';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, URL } from 'node:url';
 import fs from 'node:fs';
+import { createRequire } from 'node:module';
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import fastifyStatic from '@fastify/static';
@@ -25,6 +26,18 @@ import { db, schema } from './db/index.js';
 import { sql } from 'drizzle-orm';
 import { nowISO } from './utils/date.js';
 import { env } from './config/env.js';
+
+const require = createRequire(import.meta.url);
+const pkg = require('../package.json') as {
+  version: string;
+  name: string;
+  description: string;
+  author: string;
+  license: string;
+  homepage: string;
+  repository: { url: string };
+};
+const APP_VERSION = pkg.version;
 
 const fastify = Fastify({ logger: true, trustProxy: true });
 
@@ -76,6 +89,7 @@ systemPlugin.setDependencies({
   configService,
   pluginManager,
   botIdResolver: (cid) => ws.reverseWsManager.getBotIdByConnectionId(cid),
+  appVersion: APP_VERSION,
 });
 pluginManager.registerBuiltinPlugin('system', '系统管理', systemPlugin, 0);
 
@@ -186,7 +200,12 @@ fastify.get('/api/about', async () => {
   const allPlugins = db.select().from(schema.plugins).all();
   const allBots = db.select().from(schema.bots).all();
   return {
-    version: '1.0.0',
+    version: APP_VERSION,
+    name: pkg.description || pkg.name,
+    author: pkg.author,
+    license: pkg.license,
+    homepage: pkg.homepage,
+    repository: pkg.repository?.url?.replace(/\.git$/, '') || '',
     nodeVersion: process.version,
     platform: process.platform,
     arch: process.arch,

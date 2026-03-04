@@ -5,6 +5,7 @@ import type { ConnectionManager } from '../../ws/connection-manager.js';
 import type { ConfigService } from '../../services/config.js';
 import type { PluginManager } from '../plugin-manager.js';
 import type { BasicConfig } from '../../types/config.js';
+import os from 'node:os';
 
 export interface SystemPluginDependencies {
   oneBotClient: OneBotClient;
@@ -12,6 +13,7 @@ export interface SystemPluginDependencies {
   configService: ConfigService;
   pluginManager: PluginManager;
   botIdResolver: (connectionId: string) => number | undefined;
+  appVersion: string;
 }
 
 export class SystemPlugin implements PluginInterface {
@@ -20,6 +22,7 @@ export class SystemPlugin implements PluginInterface {
   private configService!: ConfigService;
   private pluginManager!: PluginManager;
   private botIdResolver!: (connectionId: string) => number | undefined;
+  private appVersion!: string;
   private startTime = Date.now();
 
   setDependencies(deps: SystemPluginDependencies): void {
@@ -28,6 +31,7 @@ export class SystemPlugin implements PluginInterface {
     this.configService = deps.configService;
     this.pluginManager = deps.pluginManager;
     this.botIdResolver = deps.botIdResolver;
+    this.appVersion = deps.appVersion;
   }
 
   getCommands(): PluginCommand[] {
@@ -147,30 +151,65 @@ export class SystemPlugin implements PluginInterface {
     const uptimeMs = Date.now() - this.startTime;
     const uptime = this.formatUptime(uptimeMs);
 
+    // Process memory
     const mem = process.memoryUsage();
     const rss = this.formatBytes(mem.rss);
-    const heapUsed = this.formatBytes(mem.heapUsed);
-    const heapTotal = this.formatBytes(mem.heapTotal);
 
+    // System memory
+    const totalMem = os.totalmem();
+    const freeMem = os.freemem();
+    const usedMem = totalMem - freeMem;
+    const memPercent = ((usedMem / totalMem) * 100).toFixed(1);
+
+    // CPU info
+    const cpus = os.cpus();
+    let totalIdle = 0;
+    let totalTick = 0;
+    for (const cpu of cpus) {
+      const { user, nice, sys, idle, irq } = cpu.times;
+      totalTick += user + nice + sys + idle + irq;
+      totalIdle += idle;
+    }
+    const cpuUsage = cpus.length > 0 ? ((1 - totalIdle / totalTick) * 100).toFixed(1) : '0';
+    const cpuModel = cpus.length > 0 ? cpus[0]!.model.trim() : '未知';
+
+    // Connections
     const connections = this.connectionManager.getAllConnections();
     const authenticated = connections.filter((c) => c.state === 'authenticated').length;
 
     const lines = [
       '=== 系统状态 ===',
       `运行时长: ${uptime}`,
-      `内存 (RSS): ${rss}`,
-      `堆内存: ${heapUsed} / ${heapTotal}`,
+      '',
+      `CPU: ${cpuModel}`,
+      `CPU 核心: ${cpus.length} 核`,
+      `CPU 负载: ${cpuUsage}%`,
+      '',
+      `系统内存: ${this.formatBytes(usedMem)} / ${this.formatBytes(totalMem)} (${memPercent}%)`,
+      `进程内存: ${rss}`,
+      '',
       `连接数: ${authenticated}/${connections.length} 在线`,
+      `系统: ${this.platformLabel()} | Node ${process.version}`,
     ];
 
     await this.reply(event, connectionId, lines.join('\n'));
+  }
+
+  private platformLabel(): string {
+    const map: Record<string, string> = {
+      win32: 'Windows',
+      linux: 'Linux',
+      darwin: 'macOS',
+      freebsd: 'FreeBSD',
+    };
+    return map[os.platform()] || os.platform();
   }
 
   private async cmdAbout(event: MessageEvent, connectionId: string, botId: number): Promise<void> {
     const conn = this.connectionManager.getConnection(connectionId);
     const basic = this.configService.get<BasicConfig>(botId, 'basic');
 
-    const lines = ['=== Bot 信息 ==='];
+    const lines = ['=== Bot 信息 ===', `QQBot 版本: v${this.appVersion}`];
 
     if (conn?.botInfo) {
       lines.push(`QQ: ${conn.botInfo.user_id}`);

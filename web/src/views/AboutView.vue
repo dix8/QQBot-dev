@@ -11,6 +11,11 @@ import {
 
 interface AboutInfo {
   version: string
+  name: string
+  author: string
+  license: string
+  homepage: string
+  repository: string
   nodeVersion: string
   platform: string
   arch: string
@@ -89,7 +94,7 @@ onMounted(fetchAbout)
         <CardContent class="space-y-3">
           <div class="flex justify-between">
             <span class="text-muted-foreground">项目名称</span>
-            <span class="font-medium">QQBot 管理系统</span>
+            <span class="font-medium">{{ about?.name }}</span>
           </div>
           <div class="flex justify-between">
             <span class="text-muted-foreground">版本</span>
@@ -162,18 +167,20 @@ onMounted(fetchAbout)
           <div class="flex justify-between items-center">
             <span class="text-muted-foreground">GitHub 仓库</span>
             <a
-              href="https://github.com/dix8/qqbot"
+              v-if="about?.repository"
+              :href="about.repository"
               target="_blank"
               rel="noopener noreferrer"
               class="text-primary hover:underline text-sm"
             >
-              github.com/dix8/qqbot
+              {{ about.repository.replace('https://', '') }}
             </a>
           </div>
           <div class="flex justify-between items-center">
             <span class="text-muted-foreground">文档地址</span>
             <a
-              href="https://github.com/dix8/qqbot/wiki"
+              v-if="about?.repository"
+              :href="about.repository + '/wiki'"
               target="_blank"
               rel="noopener noreferrer"
               class="text-primary hover:underline text-sm"
@@ -184,7 +191,8 @@ onMounted(fetchAbout)
           <div class="flex justify-between items-center">
             <span class="text-muted-foreground">问题反馈</span>
             <a
-              href="https://github.com/dix8/qqbot/issues"
+              v-if="about?.repository"
+              :href="about.repository + '/issues'"
               target="_blank"
               rel="noopener noreferrer"
               class="text-primary hover:underline text-sm"
@@ -195,12 +203,13 @@ onMounted(fetchAbout)
           <div class="flex justify-between items-center">
             <span class="text-muted-foreground">开源协议</span>
             <a
-              href="https://github.com/dix8/qqbot/blob/main/LICENSE"
+              v-if="about?.repository"
+              :href="about.repository + '/blob/master/LICENSE'"
               target="_blank"
               rel="noopener noreferrer"
               class="text-primary hover:underline text-sm"
             >
-              AGPL-3.0
+              {{ about?.license }}
             </a>
           </div>
         </CardContent>
@@ -215,12 +224,12 @@ onMounted(fetchAbout)
         <CardContent class="space-y-3">
           <div class="flex justify-between">
             <span class="text-muted-foreground">作者</span>
-            <span class="font-medium">Ac</span>
+            <span class="font-medium">{{ about?.author }}</span>
           </div>
-          <div class="flex justify-between items-center">
+          <div v-if="about?.homepage" class="flex justify-between items-center">
             <span class="text-muted-foreground">联系方式</span>
             <a
-              href="https://kek1.cn"
+              :href="about.homepage"
               target="_blank"
               rel="noopener noreferrer"
               class="text-primary hover:underline text-sm"

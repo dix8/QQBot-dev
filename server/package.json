@@ -1,7 +1,7 @@
 {
-  "name": "server",
-  "version": "1.0.0",
-  "description": "",
+  "name": "qqbot",
+  "version": "0.0.1",
+  "description": "QQBot 管理系统",
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
@@ -14,8 +14,13 @@
     "test:watch": "vitest"
   },
   "keywords": [],
-  "author": "",
+  "author": "Ac",
   "license": "AGPL-3.0",
+  "homepage": "https://kek1.cn",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dix8/qqbot"
+  },
   "packageManager": "pnpm@10.30.2",
   "pnpm": {
     "onlyBuiltDependencies": [

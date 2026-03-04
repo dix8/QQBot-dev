@@ -207,6 +207,7 @@ const cpuBarColor = computed(() => {
           <p class="text-xs text-muted-foreground mt-2">{{ health.cpu.model }}</p>
         </CardContent>
       </Card>
+
     </template>
   </div>
 </template>

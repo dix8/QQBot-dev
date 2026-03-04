@@ -252,7 +252,7 @@ async function openReadmeDialog(plugin: PluginInfo) {
 
 <template>
   <div class="max-w-4xl mx-auto space-y-6">
-    <div class="flex items-center justify-between">
+    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
       <div>
         <h1 class="text-2xl font-bold">插件管理</h1>
         <p class="text-sm text-muted-foreground mt-1">安装、配置和管理 Bot 插件</p>
@@ -300,7 +300,8 @@ async function openReadmeDialog(plugin: PluginInfo) {
     <div v-else class="space-y-4">
       <Card v-for="plugin in store.plugins" :key="plugin.id">
         <CardContent class="pt-4">
-          <div class="flex items-start justify-between">
+          <div class="flex flex-col gap-4">
+            <!-- Top: icon + info -->
             <div class="flex items-start gap-3 flex-1">
               <!-- Plugin icon -->
               <div class="w-10 h-10 rounded-lg shrink-0 flex items-center justify-center overflow-hidden bg-muted">
@@ -313,71 +314,74 @@ async function openReadmeDialog(plugin: PluginInfo) {
                 <Puzzle v-else class="w-5 h-5 text-muted-foreground" />
               </div>
               <div class="flex-1 min-w-0">
-                <div class="flex items-center gap-2 mb-1">
-                  <span class="font-semibold text-lg">{{ plugin.name }}</span>
-                <Badge v-if="plugin.builtin" variant="outline" class="border-blue-500 text-blue-500">内置</Badge>
-                <Badge variant="secondary">v{{ plugin.version }}</Badge>
-                <Badge v-if="plugin.loaded" variant="default">运行中</Badge>
-                <Badge v-else-if="plugin.enabled" variant="outline">已启用</Badge>
-                <Badge v-else variant="secondary">已禁用</Badge>
-                <Badge v-if="plugin.errorCount > 0" variant="destructive">
-                  {{ plugin.errorCount }} 错误
-                </Badge>
-              </div>
-              <p v-if="plugin.description" class="text-sm text-muted-foreground">{{ plugin.description }}</p>
-              <div class="flex items-center gap-4 mt-2 text-xs text-muted-foreground">
-                <span v-if="plugin.author">作者: {{ plugin.author }}</span>
-                <a
-                  v-if="plugin.repo"
-                  :href="plugin.repo"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  class="inline-flex items-center hover:text-foreground transition-colors"
-                  title="查看仓库"
-                >
-                  <Github class="w-3.5 h-3.5" />
-                </a>
-                <span v-if="!plugin.builtin">安装时间: {{ formatTime(plugin.installedAt) }}</span>
-                <Button
-                  v-if="plugin.commands.length > 0"
-                  variant="ghost"
-                  size="sm"
-                  class="h-6 px-2 text-xs gap-1"
-                  @click="showCommands(plugin.name, plugin.commands)"
-                >
-                  <Terminal class="w-3 h-3" />
-                  指令
-                </Button>
-                <Button
-                  v-if="plugin.configSchema && plugin.configSchema.length > 0"
-                  variant="ghost"
-                  size="sm"
-                  class="h-6 px-2 text-xs gap-1"
-                  @click="openConfigDialog(plugin)"
-                >
-                  <Settings class="w-3 h-3" />
-                  配置
-                </Button>
-                <Button
-                  v-if="plugin.hasReadme"
-                  variant="ghost"
-                  size="sm"
-                  class="h-6 px-2 text-xs gap-1"
-                  @click="openReadmeDialog(plugin)"
-                >
-                  <BookOpen class="w-3 h-3" />
-                  文档
-                </Button>
-              </div>
-              <div v-if="plugin.permissions && plugin.permissions.length > 0" class="flex items-center gap-1.5 mt-2">
-                <span class="text-xs text-muted-foreground">权限:</span>
-                <Badge v-for="perm in plugin.permissions" :key="perm" variant="outline" class="text-xs">
-                  {{ permissionLabels[perm] || perm }}
-                </Badge>
-              </div>
+                <div class="flex items-center gap-2 mb-1 flex-wrap">
+                  <span class="font-semibold text-base sm:text-lg">{{ plugin.name }}</span>
+                  <Badge v-if="plugin.builtin" variant="outline" class="border-blue-500 text-blue-500">内置</Badge>
+                  <Badge variant="secondary">v{{ plugin.version }}</Badge>
+                  <Badge v-if="plugin.loaded" variant="default">运行中</Badge>
+                  <Badge v-else-if="plugin.enabled" variant="outline">已启用</Badge>
+                  <Badge v-else variant="secondary">已禁用</Badge>
+                  <Badge v-if="plugin.errorCount > 0" variant="destructive">
+                    {{ plugin.errorCount }} 错误
+                  </Badge>
+                </div>
+                <p v-if="plugin.description" class="text-sm text-muted-foreground">{{ plugin.description }}</p>
+                <div class="flex flex-wrap items-center gap-x-4 gap-y-1 mt-2 text-xs text-muted-foreground">
+                  <span v-if="plugin.author">作者: {{ plugin.author }}</span>
+                  <a
+                    v-if="plugin.repo"
+                    :href="plugin.repo"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class="inline-flex items-center hover:text-foreground transition-colors"
+                    title="查看仓库"
+                  >
+                    <Github class="w-3.5 h-3.5" />
+                  </a>
+                  <span v-if="!plugin.builtin">安装时间: {{ formatTime(plugin.installedAt) }}</span>
+                </div>
+                <div class="flex flex-wrap items-center gap-1 mt-2">
+                  <Button
+                    v-if="plugin.commands.length > 0"
+                    variant="ghost"
+                    size="sm"
+                    class="h-6 px-2 text-xs gap-1"
+                    @click="showCommands(plugin.name, plugin.commands)"
+                  >
+                    <Terminal class="w-3 h-3" />
+                    指令
+                  </Button>
+                  <Button
+                    v-if="plugin.configSchema && plugin.configSchema.length > 0"
+                    variant="ghost"
+                    size="sm"
+                    class="h-6 px-2 text-xs gap-1"
+                    @click="openConfigDialog(plugin)"
+                  >
+                    <Settings class="w-3 h-3" />
+                    配置
+                  </Button>
+                  <Button
+                    v-if="plugin.hasReadme"
+                    variant="ghost"
+                    size="sm"
+                    class="h-6 px-2 text-xs gap-1"
+                    @click="openReadmeDialog(plugin)"
+                  >
+                    <BookOpen class="w-3 h-3" />
+                    文档
+                  </Button>
+                </div>
+                <div v-if="plugin.permissions && plugin.permissions.length > 0" class="flex flex-wrap items-center gap-1.5 mt-2">
+                  <span class="text-xs text-muted-foreground">权限:</span>
+                  <Badge v-for="perm in plugin.permissions" :key="perm" variant="outline" class="text-xs">
+                    {{ permissionLabels[perm] || perm }}
+                  </Badge>
+                </div>
               </div>
             </div>
-            <div v-if="!plugin.builtin" class="flex items-center gap-3 shrink-0 ml-4">
+            <!-- Bottom: actions -->
+            <div v-if="!plugin.builtin" class="flex items-center gap-3 border-t pt-3 -mx-2 px-2">
               <div class="flex items-center gap-2">
                 <Label class="text-xs text-muted-foreground">优先级</Label>
                 <Input
@@ -388,6 +392,7 @@ async function openReadmeDialog(plugin: PluginInfo) {
                   @change="handlePriorityChange(plugin.id, $event)"
                 />
               </div>
+              <div class="flex-1" />
               <Switch
                 :model-value="plugin.enabled"
                 :disabled="togglingId === plugin.id"
