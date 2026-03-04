@@ -31,6 +31,7 @@ interface LoadedPlugin {
   instance: PluginInterface;
   priority: number;
   errorCount: number;
+  dispose?: () => void;
 }
 
 export class PluginManager {
@@ -285,7 +286,7 @@ export class PluginManager {
     const instance: PluginInterface = mod.default ?? mod;
 
     const permissions: PluginPermission[] = JSON.parse(record.permissions || '[]');
-    const context = this.createContext(id, record.name, permissions);
+    const { context, dispose } = this.createContext(id, record.name, permissions);
 
     if (instance.onLoad) {
       await instance.onLoad(context);
@@ -297,6 +298,7 @@ export class PluginManager {
       instance,
       priority: record.priority,
       errorCount: 0,
+      dispose,
     });
 
     this.logger.info({ pluginId: id, name: record.name }, 'Plugin loaded');
@@ -313,6 +315,11 @@ export class PluginManager {
       }
     } catch (err) {
       this.logger.error({ err, pluginId: id }, 'Error during plugin unload');
+    }
+
+    // Dispose context: clear managed timers + mark context as disposed
+    if (plugin.dispose) {
+      plugin.dispose();
     }
 
     this.loaded.delete(id);
@@ -484,7 +491,7 @@ export class PluginManager {
     }
   }
 
-  private createContext(pluginId: string, pluginName: string, permissions: PluginPermission[] = []): PluginContext {
+  private createContext(pluginId: string, pluginName: string, permissions: PluginPermission[] = []): { context: PluginContext; dispose: () => void } {
     const pluginLogger: PluginLogger = {
       debug: (msg) => logService.addLog('debug', 'plugin', `[${pluginName}] ${msg}`),
       info: (msg) => logService.addLog('info', 'plugin', `[${pluginName}] ${msg}`),
@@ -505,8 +512,34 @@ export class PluginManager {
       }
     };
 
-    return {
+    // Disposed state + managed timers tracking
+    let disposed = false;
+    const timers = new Set<ReturnType<typeof globalThis.setTimeout>>();
+    const intervals = new Set<ReturnType<typeof globalThis.setInterval>>();
+
+    const guardDisposed = (methodName: string): boolean => {
+      if (disposed) {
+        pluginLogger.warn(`插件已卸载，忽略调用: ${methodName}`);
+        return true;
+      }
+      return false;
+    };
+
+    const dispose = () => {
+      disposed = true;
+      for (const id of timers) {
+        globalThis.clearTimeout(id);
+      }
+      timers.clear();
+      for (const id of intervals) {
+        globalThis.clearInterval(id);
+      }
+      intervals.clear();
+    };
+
+    const context: PluginContext = {
       sendMessage: async (type, target, message) => {
+        if (guardDisposed('sendMessage')) return;
         requirePermission('sendMessage');
         if (!this.oneBotClient || !this.connectionManager) {
           throw new Error('Bot 未连接');
@@ -522,6 +555,7 @@ export class PluginManager {
         }
       },
       callApi: async (action, params = {}) => {
+        if (guardDisposed('callApi')) return;
         requirePermission('callApi');
         if (!this.oneBotClient || !this.connectionManager) {
           throw new Error('Bot 未连接');
@@ -533,6 +567,7 @@ export class PluginManager {
         return this.oneBotClient.callApi(activeConn.id, action, params, pluginName);
       },
       getConfig: (key) => {
+        if (guardDisposed('getConfig')) return undefined;
         requirePermission('getConfig');
         const row = db.select()
           .from(schema.pluginConfig)
@@ -549,6 +584,7 @@ export class PluginManager {
         }
       },
       setConfig: (key, value) => {
+        if (guardDisposed('setConfig')) return;
         requirePermission('setConfig');
         const jsonValue = JSON.stringify(value);
         const now = nowISO();
@@ -562,7 +598,36 @@ export class PluginManager {
       },
       logger: pluginLogger,
       dataDir,
+      setTimeout: (callback, ms) => {
+        if (guardDisposed('setTimeout')) return 0 as unknown as number;
+        const id = globalThis.setTimeout(() => {
+          timers.delete(id);
+          if (!disposed) callback();
+        }, ms);
+        timers.add(id);
+        return id as unknown as number;
+      },
+      setInterval: (callback, ms) => {
+        if (guardDisposed('setInterval')) return 0 as unknown as number;
+        const id = globalThis.setInterval(() => {
+          if (!disposed) callback();
+        }, ms);
+        intervals.add(id);
+        return id as unknown as number;
+      },
+      clearTimeout: (timerId) => {
+        if (guardDisposed('clearTimeout')) return;
+        globalThis.clearTimeout(timerId as unknown as ReturnType<typeof globalThis.setTimeout>);
+        timers.delete(timerId as unknown as ReturnType<typeof globalThis.setTimeout>);
+      },
+      clearInterval: (intervalId) => {
+        if (guardDisposed('clearInterval')) return;
+        globalThis.clearInterval(intervalId as unknown as ReturnType<typeof globalThis.setInterval>);
+        intervals.delete(intervalId as unknown as ReturnType<typeof globalThis.setInterval>);
+      },
     };
+
+    return { context, dispose };
   }
 
   private recordToInfo(record: typeof schema.plugins.$inferSelect): PluginInfo {

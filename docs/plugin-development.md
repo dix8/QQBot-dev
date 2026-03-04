@@ -105,7 +105,7 @@ export default {
   ↓
 接收事件 → onMessage / onNotice / onRequest
   ↓
-禁用/删除 → onUnload()
+禁用/删除 → onUnload() → 系统自动清理（托管定时器清除、Context 失效）
 ```
 
 ### 生命周期钩子
@@ -115,7 +115,7 @@ interface PluginInterface {
   /** 插件加载时调用，接收 PluginContext */
   onLoad?(context: PluginContext): Promise<void> | void;
 
-  /** 插件卸载时调用，用于清理资源 */
+  /** 插件卸载时调用，用于自定义清理（如关闭第三方连接）。托管定时器由系统自动清除，不写也不会泄漏 */
   onUnload?(): Promise<void> | void;
 
   /** 收到消息事件（私聊/群聊） */
@@ -236,6 +236,38 @@ const dataFile = join(context.dataDir, 'state.json');
 if (existsSync(dataFile)) {
   const state = JSON.parse(readFileSync(dataFile, 'utf-8'));
 }
+```
+
+### setTimeout / setInterval（托管定时器）
+
+使用 `context.setTimeout` 和 `context.setInterval` 代替全局的 `setTimeout`/`setInterval`。插件卸载时系统会**自动清除**所有托管定时器，无需手动管理。
+
+```typescript
+// 托管定时器：卸载时系统自动清除
+const timerId = context.setTimeout(() => {
+  context.logger.info('延迟任务执行');
+}, 5000);
+
+const intervalId = context.setInterval(() => {
+  context.logger.info('定时任务执行');
+}, 60000);
+
+// 也可以手动清除（可选）
+context.clearTimeout(timerId);
+context.clearInterval(intervalId);
+```
+
+> **重要**：始终使用 `context.setTimeout` / `context.setInterval` 而非全局 `setTimeout` / `setInterval`。全局定时器在插件卸载后仍会继续执行，可能导致内存泄漏和意外行为。
+
+### Context 自动失效
+
+插件卸载后，`context` 上的方法（`sendMessage`、`callApi`、`getConfig`、`setConfig`、定时器方法）会自动变为安全的空操作（no-op），不会抛出异常。系统会记录一条警告日志。
+
+`logger` 和 `dataDir` **不受影响**，`onUnload` 中仍可正常使用。
+
+这意味着即使插件开发者忘记在 `onUnload` 中清理资源，系统也会兜底处理：
+- 托管定时器自动清除
+- 残留回调中的 `ctx.sendMessage()` 等调用安全忽略
 ```
 
 ---
@@ -705,6 +737,7 @@ zip -r ../my-plugin.zip .
 - `onRequest`：好友请求自动同意（configSchema 开关控制）
 - `commands`：在 manifest.json 中声明所有指令
 - `onLoad` / `onUnload`：生命周期日志
+- `ctx.setInterval`：托管定时器（卸载时系统自动清除）
 
 ### 预安装机制
 

@@ -52,6 +52,14 @@ export interface PluginContext {
   logger: PluginLogger;
   /** Plugin data directory */
   dataDir: string;
+  /** Managed setTimeout — automatically cleared on plugin unload */
+  setTimeout(callback: () => void, ms: number): number;
+  /** Managed setInterval — automatically cleared on plugin unload */
+  setInterval(callback: () => void, ms: number): number;
+  /** Clear a managed timeout */
+  clearTimeout(id: number): void;
+  /** Clear a managed interval */
+  clearInterval(id: number): void;
 }
 
 export interface PluginCommand {

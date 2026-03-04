@@ -17,6 +17,7 @@ vi.mock('../../db/index.js', async () => {
       version TEXT NOT NULL,
       description TEXT,
       author TEXT,
+      repo TEXT,
       entry_file TEXT NOT NULL,
       enabled INTEGER NOT NULL DEFAULT 0,
       priority INTEGER NOT NULL DEFAULT 100,
@@ -509,6 +510,143 @@ describe('PluginManager', () => {
         .where(eq(schema.pluginConfig.pluginId, info.id))
         .all();
       expect(remaining).toHaveLength(0);
+    });
+  });
+
+  describe('auto resource cleanup on unload', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('ctx methods become no-op after unload (sendMessage, getConfig)', async () => {
+      const calls: string[] = [];
+      const dir = createTempPlugin({
+        name: 'test-dispose',
+        permissions: ['sendMessage', 'getConfig'],
+        entryContent: `
+          let ctx;
+          export default {
+            async onLoad(context) { ctx = context; },
+            async onUnload() {},
+            getCtx() { return ctx; },
+          };
+        `,
+      });
+      tempDirs.push(dir);
+      const info = await pm.installPlugin(dir);
+      await pm.enablePlugin(info.id);
+
+      // Get plugin instance to access ctx via getCtx
+      const loaded = (pm as any).loaded.get(info.id);
+      const pluginCtx = loaded.instance.getCtx();
+      expect(pluginCtx).toBeDefined();
+
+      await pm.disablePlugin(info.id);
+
+      // After unload, sendMessage should be no-op (not throw)
+      await expect(pluginCtx.sendMessage('private', 123, 'test')).resolves.toBeUndefined();
+
+      // getConfig should return undefined (no-op)
+      expect(pluginCtx.getConfig('key')).toBeUndefined();
+    });
+
+    it('managed setInterval is auto-cleared on unload', async () => {
+      let intervalCallCount = 0;
+      const dir = createTempPlugin({
+        name: 'test-interval-cleanup',
+        entryContent: `
+          let ctx;
+          export default {
+            async onLoad(context) {
+              ctx = context;
+              ctx.setInterval(() => {
+                globalThis.__testIntervalCalled = (globalThis.__testIntervalCalled || 0) + 1;
+              }, 1000);
+            },
+            async onUnload() {},
+          };
+        `,
+      });
+      tempDirs.push(dir);
+      const info = await pm.installPlugin(dir);
+      await pm.enablePlugin(info.id);
+
+      // Advance time — interval should fire
+      vi.advanceTimersByTime(3000);
+      expect((globalThis as any).__testIntervalCalled).toBeGreaterThanOrEqual(1);
+
+      const countBefore = (globalThis as any).__testIntervalCalled;
+
+      // Unload plugin
+      await pm.disablePlugin(info.id);
+
+      // Advance time — interval should NOT fire anymore
+      vi.advanceTimersByTime(5000);
+      expect((globalThis as any).__testIntervalCalled).toBe(countBefore);
+
+      // Cleanup global
+      delete (globalThis as any).__testIntervalCalled;
+    });
+
+    it('managed setTimeout is auto-cleared on unload before it fires', async () => {
+      const dir = createTempPlugin({
+        name: 'test-timeout-cleanup',
+        entryContent: `
+          let ctx;
+          export default {
+            async onLoad(context) {
+              ctx = context;
+              ctx.setTimeout(() => {
+                globalThis.__testTimeoutFired = true;
+              }, 5000);
+            },
+            async onUnload() {},
+          };
+        `,
+      });
+      tempDirs.push(dir);
+      const info = await pm.installPlugin(dir);
+      await pm.enablePlugin(info.id);
+
+      // Unload before timeout fires
+      await pm.disablePlugin(info.id);
+
+      // Advance past the timeout
+      vi.advanceTimersByTime(10000);
+      expect((globalThis as any).__testTimeoutFired).toBeUndefined();
+
+      // Cleanup
+      delete (globalThis as any).__testTimeoutFired;
+    });
+
+    it('setTimeout/setInterval return 0 when called after dispose', async () => {
+      const dir = createTempPlugin({
+        name: 'test-disposed-timer',
+        entryContent: `
+          let ctx;
+          export default {
+            async onLoad(context) { ctx = context; },
+            async onUnload() {},
+            getCtx() { return ctx; },
+          };
+        `,
+      });
+      tempDirs.push(dir);
+      const info = await pm.installPlugin(dir);
+      await pm.enablePlugin(info.id);
+
+      const loaded = (pm as any).loaded.get(info.id);
+      const pluginCtx = loaded.instance.getCtx();
+
+      await pm.disablePlugin(info.id);
+
+      // Calling timer methods after dispose should return 0 and not throw
+      expect(pluginCtx.setTimeout(() => {}, 1000)).toBe(0);
+      expect(pluginCtx.setInterval(() => {}, 1000)).toBe(0);
     });
   });
 });

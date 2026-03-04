@@ -79,9 +79,17 @@ export default {
     ctx.logger.info('示例插件已加载');
     const count = readCounter();
     ctx.logger.info(`dataDir 历史调用计数: ${count}`);
+
+    // 演示托管定时器：使用 ctx.setInterval 创建定时任务
+    // 系统会在插件卸载时自动清除，无需手动清理
+    ctx.setInterval(() => {
+      ctx.logger.debug('示例插件心跳');
+    }, 60000);
   },
 
   async onUnload() {
+    // onUnload 仅用于自定义清理逻辑（如关闭第三方连接）
+    // 托管定时器（ctx.setTimeout/ctx.setInterval）由系统自动清除，无需手动处理
     if (ctx) {
       ctx.logger.info('示例插件已卸载');
     }
