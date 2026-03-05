@@ -59,9 +59,9 @@ async function loadBotConfig(botId: number) {
   await configStore.loadConfig(botId)
   if (configStore.config) {
     basic.value = {
-      nickname: 'QQBot', masterQQ: [], autoReply: true, autoApproveFriend: false,
-      autoApproveGroup: false, messageScope: 'both', selfCommandEnabled: false,
-      blacklistUsers: [], groupFilterMode: 'none', groupFilterList: [],
+      ...{ nickname: 'QQBot', masterQQ: [], autoReply: true, autoApproveFriend: false,
+        autoApproveGroup: false, messageScope: 'both' as const, selfCommandEnabled: false,
+        blacklistUsers: [], groupFilterMode: 'none' as const, groupFilterList: [] },
       ...configStore.config.basic,
     }
     message.value = JSON.parse(JSON.stringify(configStore.config.message))
