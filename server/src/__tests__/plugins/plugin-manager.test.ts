@@ -42,6 +42,11 @@ vi.mock('../../db/index.js', async () => {
       details TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
+    CREATE TABLE bot_config (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
   `);
   const db = drizzle(sqlite, { schema });
 

@@ -5,6 +5,7 @@ import type { ConnectionManager } from '../../ws/connection-manager.js';
 import type { ConfigService } from '../../services/config.js';
 import type { PluginManager } from '../plugin-manager.js';
 import type { BasicConfig } from '../../types/config.js';
+import { DEFAULT_CONFIG } from '../../types/config.js';
 import os from 'node:os';
 
 export interface SystemPluginDependencies {
@@ -43,6 +44,7 @@ export class SystemPlugin implements PluginInterface {
       { command: '/主人列表', description: '列出所有主人 QQ', permission: 'master' },
       { command: '/添加主人', description: '添加主人', usage: '/添加主人 <QQ号>', permission: 'super_admin' },
       { command: '/删除主人', description: '删除主人', usage: '/删除主人 <QQ号>', permission: 'super_admin' },
+      { command: '/超管列表', description: '列出所有超级管理员 QQ', permission: 'super_admin' },
       { command: '/插件列表', description: '查看已安装插件', permission: 'super_admin' },
       { command: '/启用插件', description: '启用指定插件', usage: '/启用插件 <序号或插件ID>', permission: 'super_admin' },
       { command: '/禁用插件', description: '禁用指定插件', usage: '/禁用插件 <序号或插件ID>', permission: 'super_admin' },
@@ -74,6 +76,8 @@ export class SystemPlugin implements PluginInterface {
         return this.cmdMasterAdd(event, connectionId, botId, argStr);
       case '/删除主人':
         return this.cmdMasterRemove(event, connectionId, botId, argStr);
+      case '/超管列表':
+        return this.cmdSuperAdminList(event, connectionId, botId);
       case '/插件列表':
         return this.cmdPluginList(event, connectionId, botId);
       case '/启用插件':
@@ -116,19 +120,18 @@ export class SystemPlugin implements PluginInterface {
     const isSuperAdminUser = this.hasPermission(botId, userId, 'super_admin');
 
     const lines = [
-      '=== 可用指令 ===',
-      '/帮助 - 显示可用指令列表',
-      '/状态 - 查看系统运行状态',
-      '/关于 - 查看当前 Bot 信息',
+      '=== 基础指令 ===',
+      '/帮助 — 显示可用指令列表',
+      '/状态 — 查看系统运行状态',
+      '/关于 — 查看当前 Bot 信息',
     ];
 
     if (isMasterUser) {
       lines.push(
         '',
         '=== 主人指令 ===',
-        '/昵称 - 查看当前 Bot 昵称',
-        '/昵称 <新昵称> - 设置 Bot 昵称',
-        '/主人列表 - 列出所有主人 QQ',
+        '/昵称 [新昵称] — 查看/设置 Bot 昵称',
+        '/主人列表 — 列出所有主人 QQ',
       );
     }
 
@@ -136,11 +139,11 @@ export class SystemPlugin implements PluginInterface {
       lines.push(
         '',
         '=== 超管指令 ===',
-        '/添加主人 <QQ号> - 添加主人',
-        '/删除主人 <QQ号> - 删除主人',
-        '/插件列表 - 查看已安装插件',
-        '/启用插件 <序号或ID> - 启用插件',
-        '/禁用插件 <序号或ID> - 禁用插件',
+        '/超管列表 — 列出所有超级管理员',
+        '/添加主人 <QQ号> — 添加主人',
+        '/删除主人 <QQ号> — 删除主人',
+        '/插件列表 — 查看已安装插件',
+        '/启用插件 / /禁用插件 <序号或ID>',
       );
     }
 
@@ -242,7 +245,7 @@ export class SystemPlugin implements PluginInterface {
       return;
     }
 
-    const updated: BasicConfig = { ...(basic ?? { nickname: 'QQBot', masterQQ: [], autoReply: true, messageScope: 'both' as const }), nickname: argStr };
+    const updated: BasicConfig = { ...(basic ?? DEFAULT_CONFIG.basic), nickname: argStr };
     this.configService.set(botId, 'basic', updated);
     await this.reply(event, connectionId, `昵称已更新为: ${argStr}`);
   }
@@ -260,6 +263,22 @@ export class SystemPlugin implements PluginInterface {
     }
 
     const lines = ['=== 主人列表 ===', ...masters.map((qq, i) => `${i + 1}. ${qq}`)];
+    await this.reply(event, connectionId, lines.join('\n'));
+  }
+
+  private async cmdSuperAdminList(event: MessageEvent, connectionId: string, botId: number): Promise<void> {
+    if (!this.hasPermission(botId, event.user_id, 'super_admin')) {
+      await this.reply(event, connectionId, '权限不足：仅超级管理员可使用此指令');
+      return;
+    }
+
+    const superAdmins = this.configService.getSuperAdminQQ();
+    if (superAdmins.length === 0) {
+      await this.reply(event, connectionId, '当前没有设置超级管理员');
+      return;
+    }
+
+    const lines = ['=== 超级管理员列表 ===', ...superAdmins.map((qq, i) => `${i + 1}. ${qq}`), '', '超管增删请前往 Web 管理页面操作'];
     await this.reply(event, connectionId, lines.join('\n'));
   }
 
@@ -283,7 +302,7 @@ export class SystemPlugin implements PluginInterface {
       return;
     }
 
-    const updated: BasicConfig = { ...(basic ?? { nickname: 'QQBot', masterQQ: [], autoReply: true, messageScope: 'both' as const }), masterQQ: [...masters, qq] };
+    const updated: BasicConfig = { ...(basic ?? DEFAULT_CONFIG.basic), masterQQ: [...masters, qq] };
     this.configService.set(botId, 'basic', updated);
     await this.reply(event, connectionId, `已添加主人: ${qq}`);
   }
@@ -313,7 +332,7 @@ export class SystemPlugin implements PluginInterface {
       return;
     }
 
-    const updated: BasicConfig = { ...(basic ?? { nickname: 'QQBot', masterQQ: [], autoReply: true, messageScope: 'both' as const }), masterQQ: masters.filter((m) => m !== qq) };
+    const updated: BasicConfig = { ...(basic ?? DEFAULT_CONFIG.basic), masterQQ: masters.filter((m) => m !== qq) };
     this.configService.set(botId, 'basic', updated);
     await this.reply(event, connectionId, `已删除主人: ${qq}`);
   }
@@ -411,4 +430,5 @@ export class SystemPlugin implements PluginInterface {
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
     return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
   }
+
 }

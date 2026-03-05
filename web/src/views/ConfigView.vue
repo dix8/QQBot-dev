@@ -25,7 +25,7 @@ const saving = ref(false)
 const selectedBotId = ref<number | null>(null)
 
 // Local editable copies
-const basic = ref<BasicConfig>({ nickname: 'QQBot', masterQQ: [], autoReply: true, messageScope: 'both', selfCommandEnabled: false })
+const basic = ref<BasicConfig>({ nickname: 'QQBot', masterQQ: [], autoReply: true, autoApproveFriend: false, autoApproveGroup: false, messageScope: 'both', selfCommandEnabled: false, blacklistUsers: [], groupFilterMode: 'none', groupFilterList: [] })
 const message = ref<MessageConfig>({ keywordRules: [] })
 const runtime = ref<RuntimeConfig>({
   onlineTime: { enabled: false, startHour: 8, endHour: 22 },
@@ -35,6 +35,12 @@ const runtime = ref<RuntimeConfig>({
 
 // Master QQ input
 const newMasterQQ = ref('')
+
+// Blacklist user input
+const newBlacklistUser = ref('')
+
+// Group filter input
+const newGroupFilter = ref('')
 
 // New keyword rule dialog
 const showAddRule = ref(false)
@@ -52,7 +58,12 @@ async function loadBotConfig(botId: number) {
   selectedBotId.value = botId
   await configStore.loadConfig(botId)
   if (configStore.config) {
-    basic.value = { ...configStore.config.basic }
+    basic.value = {
+      nickname: 'QQBot', masterQQ: [], autoReply: true, autoApproveFriend: false,
+      autoApproveGroup: false, messageScope: 'both', selfCommandEnabled: false,
+      blacklistUsers: [], groupFilterMode: 'none', groupFilterList: [],
+      ...configStore.config.basic,
+    }
     message.value = JSON.parse(JSON.stringify(configStore.config.message))
     runtime.value = JSON.parse(JSON.stringify(configStore.config.runtime))
   }
@@ -126,6 +137,42 @@ function addMasterQQ() {
 
 function removeMasterQQ(qq: number) {
   basic.value.masterQQ = basic.value.masterQQ.filter(q => q !== qq)
+}
+
+function addBlacklistUser() {
+  const qq = parseInt(newBlacklistUser.value.trim(), 10)
+  if (isNaN(qq) || qq <= 0) {
+    toast.error('请输入有效的 QQ 号')
+    return
+  }
+  if (basic.value.blacklistUsers.includes(qq)) {
+    toast.error('该 QQ 号已在黑名单中')
+    return
+  }
+  basic.value.blacklistUsers.push(qq)
+  newBlacklistUser.value = ''
+}
+
+function removeBlacklistUser(qq: number) {
+  basic.value.blacklistUsers = basic.value.blacklistUsers.filter(q => q !== qq)
+}
+
+function addGroupFilter() {
+  const gid = parseInt(newGroupFilter.value.trim(), 10)
+  if (isNaN(gid) || gid <= 0) {
+    toast.error('请输入有效的群号')
+    return
+  }
+  if (basic.value.groupFilterList.includes(gid)) {
+    toast.error('该群号已在列表中')
+    return
+  }
+  basic.value.groupFilterList.push(gid)
+  newGroupFilter.value = ''
+}
+
+function removeGroupFilter(gid: number) {
+  basic.value.groupFilterList = basic.value.groupFilterList.filter(g => g !== gid)
 }
 
 function addKeywordRule() {
@@ -313,6 +360,22 @@ const matchTypeLabel: Record<string, string> = {
               <Switch :model-value="basic.autoReply" @update:model-value="basic.autoReply = $event" />
             </div>
 
+            <div class="flex items-center justify-between">
+              <div>
+                <Label>自动同意好友请求</Label>
+                <p class="text-sm text-muted-foreground">收到好友申请时自动通过</p>
+              </div>
+              <Switch :model-value="basic.autoApproveFriend" @update:model-value="basic.autoApproveFriend = $event" />
+            </div>
+
+            <div class="flex items-center justify-between">
+              <div>
+                <Label>自动同意入群邀请</Label>
+                <p class="text-sm text-muted-foreground">收到入群邀请时自动通过</p>
+              </div>
+              <Switch :model-value="basic.autoApproveGroup" @update:model-value="basic.autoApproveGroup = $event" />
+            </div>
+
             <div class="space-y-2">
               <Label>消息范围</Label>
               <Select v-model="basic.messageScope">
@@ -333,6 +396,91 @@ const matchTypeLabel: Record<string, string> = {
                 <p class="text-sm text-muted-foreground">开启后，Bot 账号自己发送的消息也能触发指令和插件</p>
               </div>
               <Switch :model-value="basic.selfCommandEnabled" @update:model-value="basic.selfCommandEnabled = $event" />
+            </div>
+
+            <!-- User Blacklist -->
+            <div class="space-y-2">
+              <Label>用户黑名单</Label>
+              <p class="text-sm text-muted-foreground">黑名单中的用户消息将被完全忽略</p>
+              <div class="flex gap-2">
+                <Input
+                  v-model="newBlacklistUser"
+                  placeholder="输入 QQ 号"
+                  type="number"
+                  @keyup.enter="addBlacklistUser"
+                />
+                <Button size="sm" @click="addBlacklistUser">
+                  <Plus class="w-4 h-4 mr-1" />
+                  添加
+                </Button>
+              </div>
+              <div v-if="basic.blacklistUsers.length > 0" class="flex flex-wrap gap-2 mt-2">
+                <Badge
+                  v-for="qq in basic.blacklistUsers"
+                  :key="qq"
+                  variant="destructive"
+                  class="text-sm px-3 py-1"
+                >
+                  {{ qq }}
+                  <button
+                    class="ml-2 hover:text-red-200"
+                    @click="removeBlacklistUser(qq)"
+                  >
+                    &times;
+                  </button>
+                </Badge>
+              </div>
+              <p v-else class="text-sm text-muted-foreground">黑名单为空</p>
+            </div>
+
+            <!-- Group Filter -->
+            <div class="space-y-2">
+              <Label>群组过滤</Label>
+              <p class="text-sm text-muted-foreground">控制 Bot 服务的群组范围</p>
+              <Select
+                :model-value="basic.groupFilterMode"
+                @update:model-value="(v: AcceptableValue) => { basic.groupFilterMode = v as 'none' | 'whitelist' | 'blacklist' }"
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="选择过滤模式" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">不过滤</SelectItem>
+                  <SelectItem value="whitelist">白名单模式（仅服务列表中的群）</SelectItem>
+                  <SelectItem value="blacklist">黑名单模式（屏蔽列表中的群）</SelectItem>
+                </SelectContent>
+              </Select>
+              <div v-if="basic.groupFilterMode !== 'none'" class="space-y-2 mt-2">
+                <div class="flex gap-2">
+                  <Input
+                    v-model="newGroupFilter"
+                    placeholder="输入群号"
+                    type="number"
+                    @keyup.enter="addGroupFilter"
+                  />
+                  <Button size="sm" @click="addGroupFilter">
+                    <Plus class="w-4 h-4 mr-1" />
+                    添加
+                  </Button>
+                </div>
+                <div v-if="basic.groupFilterList.length > 0" class="flex flex-wrap gap-2 mt-2">
+                  <Badge
+                    v-for="gid in basic.groupFilterList"
+                    :key="gid"
+                    :variant="basic.groupFilterMode === 'whitelist' ? 'secondary' : 'destructive'"
+                    class="text-sm px-3 py-1"
+                  >
+                    {{ gid }}
+                    <button
+                      class="ml-2 text-muted-foreground hover:text-red-500"
+                      @click="removeGroupFilter(gid)"
+                    >
+                      &times;
+                    </button>
+                  </Badge>
+                </div>
+                <p v-else class="text-sm text-muted-foreground">列表为空</p>
+              </div>
             </div>
 
             <Button @click="saveBasic" :disabled="saving">

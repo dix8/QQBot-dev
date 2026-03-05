@@ -20,6 +20,7 @@ import { registerAuthHook } from './plugins/auth-hook.js';
 import { authService } from './services/auth.js';
 import { configService } from './services/config.js';
 import { logService } from './services/log.js';
+import { statsService } from './services/stats.js';
 import { PluginManager } from './plugins/plugin-manager.js';
 import { SystemPlugin } from './plugins/builtin/system-plugin.js';
 import { db, schema } from './db/index.js';
@@ -194,6 +195,11 @@ fastify.get('/api/health', async (request) => {
   };
 });
 
+// Stats API — message statistics for dashboard
+fastify.get('/api/stats', async () => {
+  return statsService.getSnapshot();
+});
+
 // About info — project metadata for the About page
 const serverStartTime = nowISO();
 fastify.get('/api/about', async () => {
@@ -211,7 +217,6 @@ fastify.get('/api/about', async () => {
     arch: process.arch,
     uptime: Math.floor(process.uptime()),
     startTime: serverStartTime,
-    dbPath: env.DB_PATH,
     pluginCount: allPlugins.length,
     botCount: allBots.length,
   };

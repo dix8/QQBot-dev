@@ -213,6 +213,17 @@ context.setConfig('counter', count + 1);
 context.setConfig('lastRun', new Date().toISOString());
 ```
 
+### getBotConfig
+
+读取 Bot 级别的配置（只读），需要 `getConfig` 权限。可用于获取 Bot 基础配置（如 masterQQ 列表）来实现权限检查等功能。
+
+```typescript
+// 读取 Bot 基础配置
+const basic = context.getBotConfig('basic');
+// basic.masterQQ — 主人 QQ 号列表
+// basic.nickname — Bot 昵称
+```
+
 ### logger
 
 插件专属日志器，日志会显示在 Web 管理页面的日志模块中。
@@ -261,7 +272,7 @@ context.clearInterval(intervalId);
 
 ### Context 自动失效
 
-插件卸载后，`context` 上的方法（`sendMessage`、`callApi`、`getConfig`、`setConfig`、定时器方法）会自动变为安全的空操作（no-op），不会抛出异常。系统会记录一条警告日志。
+插件卸载后，`context` 上的方法（`sendMessage`、`callApi`、`getConfig`、`getBotConfig`、`setConfig`、定时器方法）会自动变为安全的空操作（no-op），不会抛出异常。系统会记录一条警告日志。
 
 `logger` 和 `dataDir` **不受影响**，`onUnload` 中仍可正常使用。
 
@@ -731,13 +742,20 @@ zip -r ../my-plugin.zip .
 | `/echo <内容>` | 复读消息 | configSchema 控制模式和长度 |
 | `/info` | 查看 Bot 信息 | callApi（get_login_info） |
 | `/time` | 当前时间 + 调用次数 | dataDir 文件读写 |
+| `赞我` / `赞` | 给发送者名片点赞 | callApi（send_like） |
+| `/签到` | 每日签到（群聊） | dataDir 持久化（checkin.json） |
+| `/签到排行` | 本群签到排行 | 数据聚合与排序 |
+| `/禁言` `/解禁` `/踢` | 群管理操作 | callApi（set_group_ban 等）+ getBotConfig 权限检查 |
+| `/全员禁言` `/解除全员禁言` | 全员禁言控制 | callApi（set_group_whole_ban） |
+| `/群名片` | 设置群成员名片 | callApi（set_group_card）+ AT 目标提取 |
 
 此外还演示了：
-- `onNotice`：群成员增加时发送欢迎消息（configSchema 控制欢迎语）
-- `onRequest`：好友请求自动同意（configSchema 开关控制）
+- `onNotice`：覆盖全部 OneBot V11 通知事件（群成员增减、管理员变动、禁言、撤回、戳一戳、荣誉变更、运气王、群文件上传、好友添加），均有 configSchema 开关控制
+- `onMessage`：复读检测（追踪群内连续相同消息，达到阈值自动跟读）
+- `getBotConfig`：读取 Bot 基础配置（masterQQ 列表），实现主人权限检查
 - `commands`：在 manifest.json 中声明所有指令
-- `onLoad` / `onUnload`：生命周期日志
-- `ctx.setInterval`：托管定时器（卸载时系统自动清除）
+- `onLoad` / `onUnload`：生命周期日志 + 签到数据加载
+- `ctx.setInterval`：托管定时器（心跳 + 定时消息检查器，卸载时系统自动清除）
 
 ### 预安装机制
 

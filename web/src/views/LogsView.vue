@@ -15,7 +15,7 @@ import { toast } from 'vue-sonner'
 import { RefreshCw, Trash2, Search, ChevronLeft, ChevronRight } from 'lucide-vue-next'
 
 const store = useLogsStore()
-const autoRefresh = ref(false)
+const autoRefresh = ref(localStorage.getItem('logs_auto_refresh') !== 'false')
 const showClearConfirm = ref(false)
 const clearing = ref(false)
 let pollTimer: ReturnType<typeof setInterval> | null = null
@@ -24,6 +24,9 @@ const LOG_POLL_INTERVAL_MS = 5000
 
 onMounted(() => {
   store.fetchLogs()
+  if (autoRefresh.value) {
+    startAutoRefresh()
+  }
 })
 
 onUnmounted(() => {
@@ -32,20 +35,27 @@ onUnmounted(() => {
 
 function toggleAutoRefresh(enabled: boolean) {
   autoRefresh.value = enabled
+  localStorage.setItem('logs_auto_refresh', String(enabled))
   if (enabled) {
-    pollTimer = setInterval(async () => {
-      try {
-        await store.pollNewLogs()
-      } catch (e) {
-        if (isAuthError(e)) {
-          stopAutoRefresh()
-          autoRefresh.value = false
-        }
-      }
-    }, LOG_POLL_INTERVAL_MS)
+    startAutoRefresh()
   } else {
     stopAutoRefresh()
   }
+}
+
+function startAutoRefresh() {
+  stopAutoRefresh()
+  pollTimer = setInterval(async () => {
+    try {
+      await store.pollNewLogs()
+    } catch (e) {
+      if (isAuthError(e)) {
+        stopAutoRefresh()
+        autoRefresh.value = false
+        localStorage.setItem('logs_auto_refresh', 'false')
+      }
+    }
+  }, LOG_POLL_INTERVAL_MS)
 }
 
 function stopAutoRefresh() {

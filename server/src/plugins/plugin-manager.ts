@@ -8,6 +8,7 @@ import { eq, and, asc } from 'drizzle-orm';
 import { logService } from '../services/log.js';
 import { nowISO } from '../utils/date.js';
 import { env } from '../config/env.js';
+import { configService } from '../services/config.js';
 import type {
   PluginManifest,
   PluginInterface,
@@ -582,6 +583,20 @@ export class PluginManager {
         } catch {
           return row.value;
         }
+      },
+      getBotConfig: (section) => {
+        if (guardDisposed('getBotConfig')) return undefined;
+        requirePermission('getConfig');
+        // Special section: return super admin QQ list (system-level)
+        if (section === 'superAdmins') {
+          return configService.getSuperAdminQQ();
+        }
+        // Find the first authenticated connection's botId
+        if (!this.connectionManager) return undefined;
+        const connections = this.connectionManager.getAllConnections();
+        const activeConn = connections.find((c) => c.state === 'authenticated');
+        if (!activeConn?.botInfo?.user_id) return undefined;
+        return configService.get(activeConn.botInfo.user_id, section);
       },
       setConfig: (key, value) => {
         if (guardDisposed('setConfig')) return;

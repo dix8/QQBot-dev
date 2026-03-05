@@ -2,8 +2,13 @@ export interface BasicConfig {
   nickname: string
   masterQQ: number[]
   autoReply: boolean
+  autoApproveFriend: boolean
+  autoApproveGroup: boolean
   messageScope: 'private' | 'group' | 'both'
   selfCommandEnabled: boolean
+  blacklistUsers: number[]
+  groupFilterMode: 'none' | 'whitelist' | 'blacklist'
+  groupFilterList: number[]
 }
 
 export interface KeywordRule {

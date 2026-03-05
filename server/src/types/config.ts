@@ -4,8 +4,13 @@ export interface BasicConfig {
   nickname: string;
   masterQQ: number[];
   autoReply: boolean;
+  autoApproveFriend: boolean;
+  autoApproveGroup: boolean;
   messageScope: 'private' | 'group' | 'both';
   selfCommandEnabled: boolean;
+  blacklistUsers: number[];
+  groupFilterMode: 'none' | 'whitelist' | 'blacklist';
+  groupFilterList: number[];
 }
 
 export interface KeywordRule {
@@ -57,8 +62,13 @@ export const DEFAULT_CONFIG: BotConfigData = {
     nickname: 'QQBot',
     masterQQ: [],
     autoReply: true,
+    autoApproveFriend: false,
+    autoApproveGroup: false,
     messageScope: 'both',
     selfCommandEnabled: false,
+    blacklistUsers: [],
+    groupFilterMode: 'none',
+    groupFilterList: [],
   },
   message: {
     keywordRules: [],

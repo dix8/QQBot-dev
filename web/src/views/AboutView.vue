@@ -21,7 +21,6 @@ interface AboutInfo {
   arch: string
   uptime: number
   startTime: string
-  dbPath: string
   pluginCount: number
   botCount: number
 }
@@ -141,10 +140,6 @@ onMounted(fetchAbout)
           <div class="flex justify-between">
             <span class="text-muted-foreground">启动时间</span>
             <span class="font-medium">{{ startTimeLabel }}</span>
-          </div>
-          <div class="flex justify-between">
-            <span class="text-muted-foreground">数据库路径</span>
-            <span class="font-medium font-mono text-xs">{{ about?.dbPath }}</span>
           </div>
           <div class="flex justify-between">
             <span class="text-muted-foreground">已安装插件</span>

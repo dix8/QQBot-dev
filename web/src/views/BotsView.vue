@@ -88,6 +88,7 @@ const settingsBot = ref<BotDetail | null>(null)
 const settingsHost = ref('')
 const settingsPort = ref(6199)
 const settingsToken = ref('')
+const settingsClearToken = ref(false)
 const savingSettings = ref(false)
 
 function openSettings(bot: BotDetail) {
@@ -95,6 +96,7 @@ function openSettings(bot: BotDetail) {
   settingsHost.value = bot.wsHost
   settingsPort.value = bot.wsPort
   settingsToken.value = ''
+  settingsClearToken.value = false
   settingsOpen.value = true
 }
 
@@ -106,8 +108,10 @@ async function saveSettings() {
       wsHost: settingsHost.value,
       wsPort: settingsPort.value,
     }
-    // Only send wsToken if user explicitly entered a new value
-    if (settingsToken.value) {
+    // Only send wsToken if user explicitly entered a new value or cleared it
+    if (settingsClearToken.value) {
+      payload.wsToken = ''
+    } else if (settingsToken.value) {
       payload.wsToken = settingsToken.value
     }
     await store.updateBot(settingsBot.value.id, payload)
@@ -519,7 +523,22 @@ onUnmounted(() => {
           </div>
           <div class="space-y-2">
             <Label>Access Token</Label>
-            <Input v-model="settingsToken" :placeholder="settingsBot?.hasToken ? '已设置，留空保持不变' : '留空表示无鉴权'" />
+            <div class="relative">
+              <Input v-model="settingsToken"
+                :placeholder="settingsClearToken ? '已清空，保存后生效' : settingsBot?.hasToken ? '已设置，留空保持不变' : '留空表示无鉴权'"
+                :disabled="settingsClearToken"
+                :class="(settingsBot?.hasToken || settingsClearToken) ? 'pr-16' : ''" />
+              <button v-if="settingsBot?.hasToken && !settingsClearToken" type="button"
+                class="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-muted-foreground hover:text-foreground transition-colors px-1.5 py-0.5 rounded hover:bg-muted"
+                @click="settingsClearToken = true; settingsToken = ''">
+                清空
+              </button>
+              <button v-if="settingsClearToken" type="button"
+                class="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-muted-foreground hover:text-foreground transition-colors px-1.5 py-0.5 rounded hover:bg-muted"
+                @click="settingsClearToken = false">
+                撤销
+              </button>
+            </div>
           </div>
         </div>
         <DialogFooter>

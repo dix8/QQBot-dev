@@ -46,6 +46,8 @@ export interface PluginContext {
   callApi(action: string, params?: Record<string, unknown>): Promise<unknown>;
   /** Get a config value */
   getConfig(key: string): unknown;
+  /** Get a bot-level config section (e.g. 'basic') — read-only access to bot configuration */
+  getBotConfig(section: string): unknown;
   /** Set a config value (persisted to database) */
   setConfig(key: string, value: unknown): void;
   /** Plugin-scoped logger */

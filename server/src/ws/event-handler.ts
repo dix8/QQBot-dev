@@ -16,6 +16,7 @@ import type { ConfigService } from '../services/config.js';
 import type { PluginManager } from '../plugins/plugin-manager.js';
 import type { MessageBufferService } from '../services/message-buffer.js';
 import { logService } from '../services/log.js';
+import { statsService } from '../services/stats.js';
 import { db, schema } from '../db/index.js';
 import { sql, eq } from 'drizzle-orm';
 import type { BasicConfig, MessageConfig, RuntimeConfig } from '../types/config.js';
@@ -223,31 +224,45 @@ export class EventHandler {
   private dispatchMessageLogic(connectionId: string, event: MessageEvent): void {
     const rawMessage = typeof event.raw_message === 'string' ? event.raw_message : '';
 
+    // Record stats for dashboard
+    const groupId = event.message_type === 'group' ? (event as { group_id: number }).group_id : undefined;
+    statsService.recordReceived(groupId, event.user_id);
+
     // Check message scope config (per-bot)
     if (this.configService && this.botIdResolver) {
       const botId = this.botIdResolver(connectionId);
       if (botId !== undefined) {
         const basic = this.configService.get<BasicConfig>(botId, 'basic');
         if (basic) {
+          // S1: User blacklist — drop messages from blacklisted users
+          if (basic.blacklistUsers?.length > 0 && basic.blacklistUsers.includes(event.user_id)) {
+            this.logger.debug({ userId: event.user_id }, 'Message from blacklisted user, dropping');
+            return;
+          }
+
+          // S2: Group filter — whitelist/blacklist mode
+          if (event.message_type === 'group' && basic.groupFilterMode && basic.groupFilterMode !== 'none' && basic.groupFilterList?.length > 0) {
+            const groupId = event.group_id;
+            const inList = basic.groupFilterList.includes(groupId);
+            if (basic.groupFilterMode === 'whitelist' && !inList) {
+              this.logger.debug({ groupId }, 'Group not in whitelist, dropping');
+              return;
+            }
+            if (basic.groupFilterMode === 'blacklist' && inList) {
+              this.logger.debug({ groupId }, 'Group in blacklist, dropping');
+              return;
+            }
+          }
+
           if (basic.messageScope === 'private' && event.message_type === 'group') return;
           if (basic.messageScope === 'group' && event.message_type === 'private') return;
         }
 
         // Check online time
-        const runtime = this.configService.get<RuntimeConfig>(botId, 'runtime');
-        if (runtime?.onlineTime?.enabled) {
-          const hour = new Date().getHours();
-          const { startHour, endHour } = runtime.onlineTime;
-          if (startHour <= endHour) {
-            // Normal range, e.g. 8-22
-            if (hour < startHour || hour >= endHour) return;
-          } else {
-            // Overnight range, e.g. 22-8
-            if (hour >= endHour && hour < startHour) return;
-          }
-        }
+        if (this.isOutsideOnlineTime(connectionId)) return;
 
         // Check rate limit
+        const runtime = this.configService.get<RuntimeConfig>(botId, 'runtime');
         if (runtime?.rateLimit?.enabled) {
           const now = Date.now();
           const windowMs = runtime.rateLimit.windowSeconds * 1000;
@@ -301,6 +316,7 @@ export class EventHandler {
     const source = this.popApiSendSource(connectionId);
 
     // Increment sent message count for this bot
+    statsService.recordSent();
     if (this.botIdResolver) {
       const botId = this.botIdResolver(connectionId);
       if (botId !== undefined) {
@@ -356,6 +372,22 @@ export class EventHandler {
     }
   }
 
+  /** Check if the bot is currently outside its configured online time window */
+  private isOutsideOnlineTime(connectionId: string): boolean {
+    if (!this.configService || !this.botIdResolver) return false;
+    const botId = this.botIdResolver(connectionId);
+    if (botId === undefined) return false;
+    const runtime = this.configService.get<RuntimeConfig>(botId, 'runtime');
+    if (!runtime?.onlineTime?.enabled) return false;
+    const hour = new Date().getHours();
+    const { startHour, endHour } = runtime.onlineTime;
+    if (startHour <= endHour) {
+      return hour < startHour || hour >= endHour;
+    } else {
+      return hour >= endHour && hour < startHour;
+    }
+  }
+
   private handleNoticeEvent(connectionId: string, event: NoticeEvent): void {
     this.logger.info(
       { connectionId, noticeType: event.notice_type, subType: event.sub_type },
@@ -367,8 +399,8 @@ export class EventHandler {
       `${event.notice_type}${event.sub_type ? '/' + event.sub_type : ''}`,
     );
 
-    // Dispatch to plugins
-    if (this.pluginManager) {
+    // Dispatch to plugins (skip if outside online time)
+    if (this.pluginManager && !this.isOutsideOnlineTime(connectionId)) {
       this.pluginManager.dispatchNotice(event, connectionId).catch((err) => {
         this.logger.error({ err }, 'Error dispatching notice to plugins');
       });
@@ -386,8 +418,45 @@ export class EventHandler {
       `${event.request_type} (user: ${event.user_id})`,
     );
 
-    // Dispatch to plugins
-    if (this.pluginManager) {
+    // System-level auto-approve friend requests
+    if (event.request_type === 'friend' && this.configService && this.botIdResolver) {
+      const botId = this.botIdResolver(connectionId);
+      if (botId !== undefined) {
+        const basic = this.configService.get<BasicConfig>(botId, 'basic');
+        if (basic?.autoApproveFriend) {
+          this.oneBotClient.callApi(connectionId, 'set_friend_add_request', {
+            flag: event.flag,
+            approve: true,
+          }).then(() => {
+            logService.addLog('info', 'system', `已自动通过好友请求: ${event.user_id}`);
+          }).catch((err) => {
+            this.logger.error({ err, userId: event.user_id }, 'Failed to auto-approve friend request');
+          });
+        }
+      }
+    }
+
+    // System-level auto-approve group invites
+    if (event.request_type === 'group' && event.sub_type === 'invite' && this.configService && this.botIdResolver) {
+      const botId = this.botIdResolver(connectionId);
+      if (botId !== undefined) {
+        const basic = this.configService.get<BasicConfig>(botId, 'basic');
+        if (basic?.autoApproveGroup) {
+          this.oneBotClient.callApi(connectionId, 'set_group_add_request', {
+            flag: event.flag,
+            sub_type: 'invite',
+            approve: true,
+          }).then(() => {
+            logService.addLog('info', 'system', `已自动通过入群邀请: 群${event.group_id} (邀请人: ${event.user_id})`);
+          }).catch((err) => {
+            this.logger.error({ err, userId: event.user_id }, 'Failed to auto-approve group invite');
+          });
+        }
+      }
+    }
+
+    // Dispatch to plugins (skip if outside online time)
+    if (this.pluginManager && !this.isOutsideOnlineTime(connectionId)) {
       this.pluginManager.dispatchRequest(event, connectionId).catch((err) => {
         this.logger.error({ err }, 'Error dispatching request to plugins');
       });
