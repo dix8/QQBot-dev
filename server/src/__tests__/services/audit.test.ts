@@ -83,8 +83,8 @@ describe('AuditService', () => {
   });
 
   it('returns results in descending order (newest first)', () => {
-    auditService.log('first', null, 'First', undefined, undefined);
-    auditService.log('second', null, 'Second', undefined, undefined);
+    auditService.log('first', undefined, 'First', undefined, undefined);
+    auditService.log('second', undefined, 'Second', undefined, undefined);
     const result = auditService.query();
     expect(result.logs[0].action).toBe('second');
     expect(result.logs[1].action).toBe('first');

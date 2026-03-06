@@ -61,7 +61,7 @@ function describeCron(expr: string): string {
   const parts = expr.trim().split(/\s+/)
   if (parts.length !== 5) return expr
 
-  const [min, hour, dom, mon, dow] = parts
+  const [min, hour, dom, mon, dow] = parts as [string, string, string, string, string]
 
   const dowNames: Record<string, string> = {
     '0': '周日', '1': '周一', '2': '周二', '3': '周三',
@@ -112,10 +112,10 @@ function validateCron(expr: string): string {
     { name: '星期', min: 0, max: 7 },
   ]
   for (let i = 0; i < 5; i++) {
-    const p = parts[i]
+    const p = parts[i]!
     if (p === '*') continue
     const valid = /^(\*|[0-9]+(-[0-9]+)?(\/[0-9]+)?)(,(\*|[0-9]+(-[0-9]+)?(\/[0-9]+)?))*$/.test(p)
-    if (!valid) return `${ranges[i].name} 字段格式无效: ${p}`
+    if (!valid) return `${ranges[i]!.name} 字段格式无效: ${p}`
   }
   return ''
 }
@@ -123,7 +123,7 @@ function validateCron(expr: string): string {
 watch(() => props.modelValue, (val) => {
   try {
     const parsed = JSON.parse(val || '[]')
-    tasks.value = Array.isArray(parsed) ? (parsed as Record<string, unknown>[]).map(normalizeTask) as ScheduledTask[] : []
+    tasks.value = Array.isArray(parsed) ? (parsed as Record<string, unknown>[]).map(normalizeTask) as unknown as ScheduledTask[] : []
   } catch {
     tasks.value = []
   }
@@ -165,6 +165,7 @@ function openAdd() {
 
 function openEdit(index: number) {
   const task = tasks.value[index]
+  if (!task) return
   editIndex.value = index
   cronError.value = ''
   editGroupIds.value = task.group_ids.join(', ')

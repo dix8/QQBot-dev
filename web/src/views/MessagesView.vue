@@ -38,7 +38,7 @@ const searchText = ref('')
 
 onMounted(async () => {
   await botsStore.fetchBots()
-  if (botsStore.bots.length > 0) {
+  if (botsStore.bots.length > 0 && botsStore.bots[0]) {
     selectedBotId.value = botsStore.bots[0].id
   }
 })
