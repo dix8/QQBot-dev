@@ -133,7 +133,7 @@ function validateCron(expr: string): string {
 watch(() => props.modelValue, (val) => {
   try {
     const parsed = JSON.parse(val || '[]')
-    tasks.value = Array.isArray(parsed) ? parsed.map((t: Record<string, unknown>) => normalizeTask(t)) as ScheduledTask[] : []
+    tasks.value = Array.isArray(parsed) ? parsed.map((t: Record<string, unknown>) => normalizeTask(t)) as unknown as ScheduledTask[] : []
   } catch {
     tasks.value = []
   }
