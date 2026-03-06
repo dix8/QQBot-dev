@@ -88,7 +88,13 @@ function nextPage() {
 }
 
 function formatTime(ts: number) {
-  return new Date(ts * 1000).toLocaleString()
+  const d = new Date(ts * 1000)
+  const now = new Date()
+  const isToday = d.toDateString() === now.toDateString()
+  const time = d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+  if (isToday) return time
+  const date = d.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' })
+  return `${date} ${time}`
 }
 </script>
 
@@ -107,12 +113,12 @@ function formatTime(ts: number) {
 
     <!-- Filters -->
     <Card>
-      <CardContent class="p-4">
-        <div class="flex flex-wrap gap-3 items-end">
+      <CardContent class="p-3 sm:p-4">
+        <div class="grid grid-cols-2 sm:flex sm:flex-wrap gap-2 sm:gap-3 items-end">
           <div class="space-y-1">
             <label class="text-xs text-muted-foreground">消息类型</label>
             <Select v-model="typeFilter">
-              <SelectTrigger class="w-28">
+              <SelectTrigger class="w-full sm:w-28">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -124,13 +130,13 @@ function formatTime(ts: number) {
           </div>
           <div class="space-y-1">
             <label class="text-xs text-muted-foreground">群号</label>
-            <Input v-model="groupFilter" placeholder="筛选群号" class="w-36" @keyup.enter="doSearch" />
+            <Input v-model="groupFilter" placeholder="筛选群号" class="w-full sm:w-36" @keyup.enter="doSearch" />
           </div>
           <div class="space-y-1">
             <label class="text-xs text-muted-foreground">用户 QQ</label>
-            <Input v-model="userFilter" placeholder="筛选 QQ" class="w-36" @keyup.enter="doSearch" />
+            <Input v-model="userFilter" placeholder="筛选 QQ" class="w-full sm:w-36" @keyup.enter="doSearch" />
           </div>
-          <div class="space-y-1 flex-1 min-w-[200px]">
+          <div class="space-y-1 col-span-2 sm:flex-1 sm:min-w-[200px]">
             <label class="text-xs text-muted-foreground">搜索内容</label>
             <div class="flex gap-2">
               <Input v-model="searchText" placeholder="搜索消息内容" @keyup.enter="doSearch" />
@@ -150,18 +156,32 @@ function formatTime(ts: number) {
         <div v-else-if="loading" class="py-12 text-center text-sm text-muted-foreground">加载中...</div>
         <div v-else-if="messages.length === 0" class="py-12 text-center text-sm text-muted-foreground">暂无消息记录</div>
         <div v-else class="divide-y">
-          <div v-for="msg in messages" :key="msg.id" class="px-4 py-3 hover:bg-muted/30 transition-colors">
-            <div class="flex items-center gap-2 mb-1">
-              <span class="text-[10px] px-1.5 py-0.5 rounded font-medium"
-                :class="msg.messageType === 'group' ? 'bg-blue-500/10 text-blue-500' : 'bg-green-500/10 text-green-500'">
-                {{ msg.messageType === 'group' ? '群聊' : '私聊' }}
-              </span>
-              <span v-if="msg.groupId" class="text-xs text-muted-foreground">群 {{ msg.groupId }}</span>
-              <span class="text-xs font-medium">{{ msg.nickname || msg.userId }}</span>
-              <span class="text-xs text-muted-foreground">({{ msg.userId }})</span>
-              <span class="ml-auto text-[10px] text-muted-foreground">{{ formatTime(msg.time) }}</span>
+          <div v-for="msg in messages" :key="msg.id" class="px-3 sm:px-4 py-3 hover:bg-muted/30 transition-colors">
+            <div class="flex gap-2.5">
+              <!-- Avatar -->
+              <img
+                :src="`https://q1.qlogo.cn/g?b=qq&nk=${msg.userId}&s=100`"
+                class="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-muted shrink-0 mt-0.5"
+                loading="lazy"
+                @error="($event.target as HTMLImageElement).src = `https://q1.qlogo.cn/g?b=qq&nk=10000&s=100`"
+              />
+              <!-- Content -->
+              <div class="flex-1 min-w-0">
+                <!-- Header -->
+                <div class="flex items-center gap-1.5 flex-wrap">
+                  <span class="text-sm font-medium truncate max-w-[120px] sm:max-w-none">{{ msg.nickname || msg.userId }}</span>
+                  <span class="text-[10px] text-muted-foreground font-mono hidden sm:inline">({{ msg.userId }})</span>
+                  <span class="text-[10px] px-1.5 py-0.5 rounded font-medium shrink-0"
+                    :class="msg.messageType === 'group' ? 'bg-blue-500/10 text-blue-500' : 'bg-green-500/10 text-green-500'">
+                    {{ msg.messageType === 'group' ? '群' : '私' }}
+                  </span>
+                  <span v-if="msg.groupId" class="text-[10px] text-muted-foreground shrink-0">{{ msg.groupId }}</span>
+                  <span class="text-[10px] text-muted-foreground ml-auto shrink-0">{{ formatTime(msg.time) }}</span>
+                </div>
+                <!-- Message body -->
+                <p class="text-sm mt-1 break-all text-foreground/90 leading-relaxed">{{ msg.rawMessage }}</p>
+              </div>
             </div>
-            <p class="text-sm break-all">{{ msg.rawMessage }}</p>
           </div>
         </div>
       </CardContent>
