@@ -4,6 +4,18 @@
 
 ---
 
+## [0.4.1] - 2026-03-06
+
+### 修复
+
+- 修复 `ScheduledMessageEditor` cron 解析变量 possibly undefined 导致构建失败
+- 修复 `ConfigView` 缺少 `AcceptableValue` 类型导入导致构建失败
+- 修复 `MessagesView` 初始化时 `bots[0]` 空值访问导致构建失败
+- 修复 `audit.test.ts` 参数类型 `null` 与函数签名 `string | undefined` 不匹配
+- 移除 `AppLayout` 未使用的 `watch` import
+
+---
+
 ## [0.4.0] - 2026-03-06
 
 ### 新功能
