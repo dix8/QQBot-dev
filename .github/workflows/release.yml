@@ -97,6 +97,55 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate release notes
+        id: notes
+        run: |
+          TAG="${{ inputs.version != '' && format('v{0}', inputs.version) || github.ref_name }}"
+
+          # 找到上一个 tag
+          PREV_TAG=$(git tag --sort=-v:refname | grep -v "^${TAG}$" | head -1)
+
+          if [ -z "$PREV_TAG" ]; then
+            RANGE="HEAD"
+          else
+            RANGE="${PREV_TAG}..HEAD"
+          fi
+
+          # 按 conventional commit 分类
+          FEATS=$(git log "$RANGE" --pretty=format:"%s" | grep -iE "^feat(\(.+\))?:" | sed 's/^[^:]*: /- /' || true)
+          FIXES=$(git log "$RANGE" --pretty=format:"%s" | grep -iE "^fix(\(.+\))?:" | sed 's/^[^:]*: /- /' || true)
+          OTHERS=$(git log "$RANGE" --pretty=format:"%s" | grep -viE "^(feat|fix|docs|chore|ci|test|refactor)(\(.+\))?:" || true)
+          CHORES=$(git log "$RANGE" --pretty=format:"%s" | grep -iE "^(chore|ci|refactor|docs|test)(\(.+\))?:" | sed 's/^[^:]*: /- /' || true)
+
+          {
+            echo "body<<RELEASE_EOF"
+            if [ -n "$FEATS" ]; then
+              echo "## ✨ 新功能"
+              echo "$FEATS"
+              echo ""
+            fi
+            if [ -n "$FIXES" ]; then
+              echo "## 🐛 修复"
+              echo "$FIXES"
+              echo ""
+            fi
+            if [ -n "$CHORES" ]; then
+              echo "## 🔧 其他"
+              echo "$CHORES"
+              echo ""
+            fi
+            if [ -z "$FEATS" ] && [ -z "$FIXES" ] && [ -z "$CHORES" ]; then
+              echo "维护性更新。"
+              echo ""
+            fi
+            echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREV_TAG}...${TAG}"
+            echo "RELEASE_EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - uses: actions/download-artifact@v4
         with:
           name: windows-portable
@@ -105,7 +154,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.version != '' && format('v{0}', inputs.version) || github.ref_name }}
-          generate_release_notes: true
+          body: ${{ steps.notes.outputs.body }}
           draft: false
           prerelease: ${{ contains(inputs.version || github.ref_name, '-') }}
           files: QQBot-*-windows-x64.zip

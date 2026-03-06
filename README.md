@@ -16,7 +16,7 @@ QQ 机器人 Web 管理面板 — 通过反向 WebSocket 连接 [NapCat](https:/
 - **QQ 指令配置** — 通过 QQ 聊天直接管理 Bot 配置（自动回复、黑名单、群过滤、在线时段等）
 - **日志系统** — 连接日志、运行日志、插件日志，支持筛选搜索与自动刷新
 - **登录鉴权** — 账号密码 + JWT 认证
-- **Docker 部署** — 单容器一键部署，前端构建产物由后端静态托管
+- **多种部署** — Docker 单容器一键部署 / Windows 便携包解压即用（无需安装 Node.js）
 
 ## 技术栈
 
@@ -25,7 +25,7 @@ QQ 机器人 Web 管理面板 — 通过反向 WebSocket 连接 [NapCat](https:/
 | 前端 | Vue 3 + TypeScript + Vite + Shadcn-vue + Tailwind CSS + Pinia |
 | 后端 | Node.js + TypeScript + Fastify + ws |
 | 数据库 | SQLite (better-sqlite3 + Drizzle ORM) |
-| 部署 | Docker |
+| 部署 | Docker / Windows 便携包 |
 
 ## 快速开始
 
@@ -84,7 +84,7 @@ docker compose pull && docker compose up -d
 如需修改端口，编辑 `docker-compose.yml` 中的 `ports` 映射即可。
 
 <details>
-<summary>其他部署方式</summary>
+<summary>其他 Docker 部署方式</summary>
 
 **Docker Run：**
 
@@ -103,7 +103,21 @@ docker run -d --name qqbot -p 3000:3000 -p 6199:6199 -v qqbot-data:/app/data --r
 
 </details>
 
-部署后访问 `http://your-server:3000` 即可使用 Web 管理面板。
+### 生产部署（Windows 便携包）
+
+从 [Releases](https://github.com/dix8/QQBot-dev/releases) 下载 `QQBot-*-windows-x64.zip`，解压后双击 `start.bat` 即可运行，无需安装 Node.js。
+
+```
+QQBot/
+├── node.exe         ← 内置 Node.js 运行时
+├── start.bat        ← 双击启动
+├── .env.example     ← 配置模板（复制为 .env 可自定义）
+├── dist/            ← 服务端代码
+├── public/          ← 前端页面
+└── data/            ← 运行时自动创建（数据库、插件、密钥）
+```
+
+启动后访问 `http://localhost:3000` 即可使用。如需修改端口等配置，复制 `.env.example` 为 `.env` 进行编辑。
 
 ### 连接 NapCat
 
