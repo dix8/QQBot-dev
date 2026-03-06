@@ -1,6 +1,6 @@
 {
   "name": "qqbot",
-  "version": "0.4.4",
+  "version": "0.4.5",
   "description": "QQBot 管理系统",
   "type": "module",
   "scripts": {

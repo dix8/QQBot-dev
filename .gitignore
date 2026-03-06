@@ -44,6 +44,9 @@ QQ机器人Web管理项目需求文档.md
 参考项目/
 onebot-11-master/
 
+# Release build
+release/
+
 # Claude Code
 .claude/
 memory/

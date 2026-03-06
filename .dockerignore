@@ -36,6 +36,9 @@ Thumbs.db
 # Reference project (not needed in image)
 参考项目/
 
+# Release build
+release/
+
 # Documentation
 *.md
 !README.md
