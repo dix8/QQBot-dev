@@ -89,36 +89,47 @@ echo "[6/6] 复制 Node.js 运行时 & 生成启动脚本..."
 cp "$NODE_EXE" "$OUT/node.exe"
 
 # ── 6. 生成 start.bat ───────────────────────────
-cat > "$OUT/start.bat" << 'BAT'
-@echo off
-chcp 65001 >nul 2>&1
-cd /d "%~dp0"
-title QQBot Web 管理系统
-
-echo ========================================
-echo   QQBot Web 管理系统
-echo ========================================
-echo.
-
-if exist .env (
-    echo [*] 已加载 .env 配置文件
-) else (
-    echo [!] 未找到 .env 文件，使用默认配置
-    echo [!] 可复制 .env.example 为 .env 进行自定义配置
-)
-echo.
-
-echo [*] 正在启动服务...
-echo [*] 启动后请访问 http://localhost:3000
-echo [*] 按 Ctrl+C 停止服务
-echo.
-
-node.exe dist/index.js
-
-echo.
-echo [*] 服务已停止
-pause
-BAT
+# 使用 printf 写入，确保 CRLF 行尾（Windows cmd.exe 对 LF-only 解析异常）
+{
+  printf '@echo off\r\n'
+  printf 'chcp 65001 >nul 2>&1\r\n'
+  printf 'cd /d "%%~dp0"\r\n'
+  printf 'title QQBot Web 管理系统\r\n'
+  printf '\r\n'
+  printf 'echo ========================================\r\n'
+  printf 'echo   QQBot Web 管理系统\r\n'
+  printf 'echo ========================================\r\n'
+  printf 'echo.\r\n'
+  printf '\r\n'
+  printf 'if not exist node.exe (\r\n'
+  printf '    echo [错误] 未找到 node.exe\r\n'
+  printf '    goto :end\r\n'
+  printf ')\r\n'
+  printf 'if not exist dist\\index.js (\r\n'
+  printf '    echo [错误] 未找到 dist\\index.js\r\n'
+  printf '    goto :end\r\n'
+  printf ')\r\n'
+  printf '\r\n'
+  printf 'if exist .env (\r\n'
+  printf '    echo [*] 已加载 .env 配置文件\r\n'
+  printf ') else (\r\n'
+  printf '    echo [!] 未找到 .env 文件，使用默认配置\r\n'
+  printf '    echo [!] 可复制 .env.example 为 .env 进行自定义配置\r\n'
+  printf ')\r\n'
+  printf 'echo.\r\n'
+  printf '\r\n'
+  printf 'echo [*] 正在启动服务...\r\n'
+  printf 'echo [*] 启动后请访问 http://localhost:3000\r\n'
+  printf 'echo [*] 按 Ctrl+C 停止服务\r\n'
+  printf 'echo.\r\n'
+  printf '\r\n'
+  printf 'node.exe dist/index.js\r\n'
+  printf '\r\n'
+  printf ':end\r\n'
+  printf 'echo.\r\n'
+  printf 'echo [*] 服务已停止\r\n'
+  printf 'pause\r\n'
+} > "$OUT/start.bat"
 
 # ── 7. 生成 .env.example ────────────────────────
 cat > "$OUT/.env.example" << 'ENV'
