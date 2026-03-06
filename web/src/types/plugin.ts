@@ -9,6 +9,7 @@ export interface PluginConfigItem {
   options?: { label: string; value: string | number }[]
   required?: boolean
   placeholder?: string
+  editor?: string
 }
 
 export interface PluginCommand {

@@ -55,6 +55,7 @@ export class ReverseWsManager {
 
   /** Start a per-bot reverse WS server */
   async startServer(botId: number, wsHost: string, wsPort: number, wsToken: string): Promise<void> {
+    if (this.closed) return;
     // If already running, stop first
     await this.stopServer(botId);
 

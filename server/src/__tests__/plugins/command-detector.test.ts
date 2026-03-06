@@ -316,11 +316,11 @@ describe('mergeCommands', () => {
     expect(result[0].usage).toBe('/echo <内容>');
   });
 
-  it('permission：detected 优先于 manifest', () => {
+  it('permission：manifest 优先于 detected', () => {
     const manifest: PluginCommand[] = [
-      { command: '/ban', description: '禁言', permission: 'all' },
+      { command: '/ban', description: '禁言', permission: 'master' },
     ];
-    const detected = [{ command: '/ban', permission: 'master' as const }];
+    const detected = [{ command: '/ban', permission: 'all' as const }];
     const result = mergeCommands(manifest, detected);
     expect(result[0].permission).toBe('master');
   });

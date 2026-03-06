@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -9,12 +9,16 @@ import { Badge } from '@/components/ui/badge'
 import { Switch } from '@/components/ui/switch'
 import { Label } from '@/components/ui/label'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger, DialogClose } from '@/components/ui/dialog'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { useLogsStore } from '@/stores/logs'
-import { isAuthError } from '@/api/client'
+import { useAdminWs } from '@/composables/useAdminWs'
+import { isAuthError, getToken } from '@/api/client'
 import { toast } from 'vue-sonner'
-import { RefreshCw, Trash2, Search, ChevronLeft, ChevronRight } from 'lucide-vue-next'
+import { RefreshCw, Trash2, Search, ChevronLeft, ChevronRight, Download } from 'lucide-vue-next'
+import type { LogEntry } from '@/types/log'
 
 const store = useLogsStore()
+const { connected: wsConnected, on: wsOn, off: wsOff } = useAdminWs()
 const autoRefresh = ref(localStorage.getItem('logs_auto_refresh') !== 'false')
 const showClearConfirm = ref(false)
 const clearing = ref(false)
@@ -22,35 +26,50 @@ let pollTimer: ReturnType<typeof setInterval> | null = null
 
 const LOG_POLL_INTERVAL_MS = 5000
 
+function onLogPush(data: unknown) {
+  if (!autoRefresh.value) return
+  store.pushLog(data as LogEntry)
+}
+
 onMounted(() => {
   store.fetchLogs()
-  if (autoRefresh.value) {
-    startAutoRefresh()
+  wsOn('log:new', onLogPush)
+  if (autoRefresh.value && !wsConnected.value) {
+    startFallbackPolling()
   }
 })
 
 onUnmounted(() => {
-  stopAutoRefresh()
+  stopFallbackPolling()
+  wsOff('log:new', onLogPush)
+})
+
+watch(wsConnected, (connected) => {
+  if (connected) {
+    stopFallbackPolling()
+  } else if (autoRefresh.value) {
+    startFallbackPolling()
+  }
 })
 
 function toggleAutoRefresh(enabled: boolean) {
   autoRefresh.value = enabled
   localStorage.setItem('logs_auto_refresh', String(enabled))
-  if (enabled) {
-    startAutoRefresh()
+  if (enabled && !wsConnected.value) {
+    startFallbackPolling()
   } else {
-    stopAutoRefresh()
+    stopFallbackPolling()
   }
 }
 
-function startAutoRefresh() {
-  stopAutoRefresh()
+function startFallbackPolling() {
+  stopFallbackPolling()
   pollTimer = setInterval(async () => {
     try {
       await store.pollNewLogs()
     } catch (e) {
       if (isAuthError(e)) {
-        stopAutoRefresh()
+        stopFallbackPolling()
         autoRefresh.value = false
         localStorage.setItem('logs_auto_refresh', 'false')
       }
@@ -58,7 +77,7 @@ function startAutoRefresh() {
   }, LOG_POLL_INTERVAL_MS)
 }
 
-function stopAutoRefresh() {
+function stopFallbackPolling() {
   if (pollTimer) {
     clearInterval(pollTimer)
     pollTimer = null
@@ -88,6 +107,32 @@ async function confirmClear() {
 }
 
 const totalPages = computed(() => Math.max(1, Math.ceil(store.total / store.limit)))
+
+async function exportLogs(format: 'json' | 'csv') {
+  const params = new URLSearchParams()
+  params.set('format', format)
+  params.set('limit', '10000')
+  if (store.filterLevel && store.filterLevel !== 'all') params.set('level', store.filterLevel)
+  if (store.filterSource && store.filterSource !== 'all') params.set('source', store.filterSource)
+  if (store.filterSearch) params.set('search', store.filterSearch)
+
+  try {
+    const res = await fetch(`/api/logs/export?${params}`, {
+      headers: { Authorization: `Bearer ${getToken()}` },
+    })
+    if (!res.ok) throw new Error('导出失败')
+    const blob = await res.blob()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `logs-${new Date().toISOString().slice(0, 10)}.${format}`
+    a.click()
+    URL.revokeObjectURL(url)
+    toast.success(`日志已导出为 ${format.toUpperCase()}`)
+  } catch (e) {
+    toast.error(e instanceof Error ? e.message : '导出失败')
+  }
+}
 
 function levelColor(level: string): 'default' | 'secondary' | 'destructive' | 'outline' {
   switch (level) {
@@ -127,6 +172,18 @@ function formatTime(iso?: string) {
           <Label class="text-sm">自动刷新</Label>
           <Switch :model-value="autoRefresh" @update:model-value="toggleAutoRefresh" />
         </div>
+        <DropdownMenu>
+          <DropdownMenuTrigger as-child>
+            <Button variant="outline" size="sm">
+              <Download class="w-4 h-4 mr-1" />
+              导出
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem @click="exportLogs('csv')">导出为 CSV</DropdownMenuItem>
+            <DropdownMenuItem @click="exportLogs('json')">导出为 JSON</DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
         <Dialog v-model:open="showClearConfirm">
           <DialogTrigger as-child>
             <Button variant="destructive" size="sm">
@@ -209,7 +266,10 @@ function formatTime(iso?: string) {
     <!-- Logs -->
     <Card>
       <CardContent class="pt-4">
-        <div v-if="store.loading && store.logs.length === 0" class="text-sm text-muted-foreground py-8 text-center">
+        <div v-if="store.error" class="text-sm text-destructive py-8 text-center">
+          {{ store.error }}
+        </div>
+        <div v-else-if="store.loading && store.logs.length === 0" class="text-sm text-muted-foreground py-8 text-center">
           加载中...
         </div>
         <div v-else-if="store.logs.length === 0" class="text-sm text-muted-foreground py-8 text-center">

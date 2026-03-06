@@ -107,7 +107,7 @@ docker run -d --name qqbot -p 3000:3000 -p 6199:6199 -v qqbot-data:/app/data --r
 
 ### 连接 NapCat
 
-1. 在 NapCat 配置中设置反向 WebSocket 地址为 `ws://your-server:3000/ws`
+1. 在 NapCat 配置中设置反向 WebSocket 地址为 `ws://your-server:6199/ws`（端口可在 Web 面板中配置）
 2. 配置 access token（如需要）
 3. NapCat 启动后会自动连接，Web 面板中即可看到 Bot 上线
 

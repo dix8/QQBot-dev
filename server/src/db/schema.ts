@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, primaryKey } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, text, integer, primaryKey, index } from 'drizzle-orm/sqlite-core';
 import { sql } from 'drizzle-orm';
 
 export const users = sqliteTable('users', {
@@ -23,7 +23,10 @@ export const logs = sqliteTable('logs', {
   message: text('message').notNull(),
   details: text('details'),
   createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
-});
+}, (table) => [
+  index('logs_level_created_idx').on(table.level, table.createdAt),
+  index('logs_source_created_idx').on(table.source, table.createdAt),
+]);
 
 export const plugins = sqliteTable('plugins', {
   id: text('id').primaryKey(),
@@ -49,6 +52,49 @@ export const pluginConfig = sqliteTable('plugin_config', {
   updatedAt: text('updated_at').notNull().default(sql`(datetime('now'))`),
 }, (table) => [
   primaryKey({ columns: [table.pluginId, table.key] }),
+]);
+
+export const messageStats = sqliteTable('message_stats', {
+  hour: text('hour').primaryKey(),
+  received: integer('received').notNull().default(0),
+  sent: integer('sent').notNull().default(0),
+});
+
+export const messageRankings = sqliteTable('message_rankings', {
+  type: text('type').notNull(),
+  targetId: integer('target_id').notNull(),
+  count: integer('count').notNull().default(0),
+}, (table) => [
+  primaryKey({ columns: [table.type, table.targetId] }),
+]);
+
+export const auditLogs = sqliteTable('audit_logs', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  action: text('action').notNull(),
+  target: text('target'),
+  detail: text('detail'),
+  username: text('username'),
+  ip: text('ip'),
+  createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
+}, (table) => [
+  index('audit_action_created_idx').on(table.action, table.createdAt),
+]);
+
+export const messages = sqliteTable('messages', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  botId: integer('bot_id'),
+  messageId: integer('message_id'),
+  messageType: text('message_type').notNull(),
+  groupId: integer('group_id'),
+  userId: integer('user_id').notNull(),
+  nickname: text('nickname'),
+  rawMessage: text('raw_message'),
+  time: integer('time').notNull(),
+  createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
+}, (table) => [
+  index('messages_bot_idx').on(table.botId),
+  index('messages_type_group_idx').on(table.messageType, table.groupId),
+  index('messages_time_idx').on(table.time),
 ]);
 
 export const bots = sqliteTable('bots', {

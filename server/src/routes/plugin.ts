@@ -3,6 +3,7 @@ import { mkdirSync, rmSync, existsSync, createReadStream, readFileSync } from 'n
 import { join, resolve, sep } from 'node:path';
 import AdmZip from 'adm-zip';
 import type { PluginManager } from '../plugins/plugin-manager.js';
+import { auditService } from '../services/audit.js';
 
 const UPLOAD_TMP_DIR = resolve('data/tmp');
 
@@ -18,7 +19,7 @@ export function pluginRoutes(fastify: FastifyInstance, pluginManager: PluginMana
   fastify.get<{ Params: { id: string } }>('/api/plugins/:id', async (request, reply) => {
     const info = pluginManager.getPluginInfo(request.params.id);
     if (!info) {
-      return reply.status(404).send({ error: '插件不存在' });
+      return reply.code(404).send({ error: '插件不存在' });
     }
     return info;
   });
@@ -27,11 +28,11 @@ export function pluginRoutes(fastify: FastifyInstance, pluginManager: PluginMana
   fastify.get<{ Params: { id: string } }>('/api/plugins/:id/icon', async (request, reply) => {
     const info = pluginManager.getPluginInfo(request.params.id);
     if (!info || info.builtin) {
-      return reply.status(404).send({ error: '插件不存在' });
+      return reply.code(404).send({ error: '插件不存在' });
     }
     const iconPath = join(pluginManager.getPluginDir(request.params.id), 'icon.png');
     if (!existsSync(iconPath)) {
-      return reply.status(404).send({ error: '图标不存在' });
+      return reply.code(404).send({ error: '图标不存在' });
     }
     reply.header('Content-Type', 'image/png');
     reply.header('Cache-Control', 'public, max-age=3600');
@@ -42,11 +43,11 @@ export function pluginRoutes(fastify: FastifyInstance, pluginManager: PluginMana
   fastify.get<{ Params: { id: string } }>('/api/plugins/:id/readme', async (request, reply) => {
     const info = pluginManager.getPluginInfo(request.params.id);
     if (!info || info.builtin) {
-      return reply.status(404).send({ error: '插件不存在' });
+      return reply.code(404).send({ error: '插件不存在' });
     }
     const readmePath = join(pluginManager.getPluginDir(request.params.id), 'README.md');
     if (!existsSync(readmePath)) {
-      return reply.status(404).send({ error: '文档不存在' });
+      return reply.code(404).send({ error: '文档不存在' });
     }
     const content = readFileSync(readmePath, 'utf-8');
     reply.header('Content-Type', 'text/plain; charset=utf-8');
@@ -57,7 +58,7 @@ export function pluginRoutes(fastify: FastifyInstance, pluginManager: PluginMana
   fastify.post('/api/plugins/upload', async (request, reply) => {
     const file = await request.file();
     if (!file) {
-      return reply.status(400).send({ error: '未上传文件' });
+      return reply.code(400).send({ error: '未上传文件' });
     }
 
     const buffer = await file.toBuffer();
@@ -71,16 +72,17 @@ export function pluginRoutes(fastify: FastifyInstance, pluginManager: PluginMana
       for (const entry of zip.getEntries()) {
         const entryPath = resolve(tmpDir, entry.entryName);
         if (!entryPath.startsWith(resolvedTmpDir)) {
-          return reply.status(400).send({ error: '插件包含非法路径' });
+          return reply.code(400).send({ error: '插件包含非法路径' });
         }
       }
 
       zip.extractAllTo(tmpDir, true);
 
       const info = await pluginManager.installPlugin(tmpDir);
+      auditService.log('plugin_install', info.id, `安装插件: ${info.name}`, (request.user as { username?: string })?.username, request.ip);
       return info;
     } catch (err) {
-      return reply.status(400).send({ error: String(err instanceof Error ? err.message : err) });
+      return reply.code(400).send({ error: String(err instanceof Error ? err.message : err) });
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -90,9 +92,10 @@ export function pluginRoutes(fastify: FastifyInstance, pluginManager: PluginMana
   fastify.post<{ Params: { id: string } }>('/api/plugins/:id/enable', async (request, reply) => {
     try {
       await pluginManager.enablePlugin(request.params.id);
+      auditService.log('plugin_enable', request.params.id, '启用插件', (request.user as { username?: string })?.username, request.ip);
       return { success: true };
     } catch (err) {
-      return reply.status(400).send({ error: String(err instanceof Error ? err.message : err) });
+      return reply.code(400).send({ error: String(err instanceof Error ? err.message : err) });
     }
   });
 
@@ -100,15 +103,17 @@ export function pluginRoutes(fastify: FastifyInstance, pluginManager: PluginMana
   fastify.post<{ Params: { id: string } }>('/api/plugins/:id/disable', async (request, reply) => {
     try {
       await pluginManager.disablePlugin(request.params.id);
+      auditService.log('plugin_disable', request.params.id, '禁用插件', (request.user as { username?: string })?.username, request.ip);
       return { success: true };
     } catch (err) {
-      return reply.status(400).send({ error: String(err instanceof Error ? err.message : err) });
+      return reply.code(400).send({ error: String(err instanceof Error ? err.message : err) });
     }
   });
 
   // POST /api/plugins/reload — reload all plugins
-  fastify.post('/api/plugins/reload', async () => {
+  fastify.post('/api/plugins/reload', async (request) => {
     const result = await pluginManager.reloadAllPlugins();
+    auditService.log('plugin_reload_all', 'all', '重载全部插件', (request.user as { username?: string })?.username, request.ip);
     return result;
   });
 
@@ -118,7 +123,7 @@ export function pluginRoutes(fastify: FastifyInstance, pluginManager: PluginMana
     async (request, reply) => {
       const { priority } = request.body as { priority: number };
       if (typeof priority !== 'number' || priority < 0) {
-        return reply.status(400).send({ error: '无效的优先级值' });
+        return reply.code(400).send({ error: '无效的优先级值' });
       }
       pluginManager.updatePriority(request.params.id, priority);
       return { success: true };
@@ -129,9 +134,10 @@ export function pluginRoutes(fastify: FastifyInstance, pluginManager: PluginMana
   fastify.delete<{ Params: { id: string } }>('/api/plugins/:id', async (request, reply) => {
     try {
       await pluginManager.deletePlugin(request.params.id);
+      auditService.log('plugin_delete', request.params.id, '删除插件', (request.user as { username?: string })?.username, request.ip);
       return { success: true };
     } catch (err) {
-      return reply.status(400).send({ error: String(err instanceof Error ? err.message : err) });
+      return reply.code(400).send({ error: String(err instanceof Error ? err.message : err) });
     }
   });
 
@@ -139,7 +145,7 @@ export function pluginRoutes(fastify: FastifyInstance, pluginManager: PluginMana
   fastify.get<{ Params: { id: string } }>('/api/plugins/:id/config', async (request, reply) => {
     const info = pluginManager.getPluginInfo(request.params.id);
     if (!info) {
-      return reply.status(404).send({ error: '插件不存在' });
+      return reply.code(404).send({ error: '插件不存在' });
     }
     const values = pluginManager.getPluginConfigValues(request.params.id);
     // Merge defaults for keys not yet set
@@ -156,17 +162,18 @@ export function pluginRoutes(fastify: FastifyInstance, pluginManager: PluginMana
     async (request, reply) => {
       const info = pluginManager.getPluginInfo(request.params.id);
       if (!info) {
-        return reply.status(404).send({ error: '插件不存在' });
+        return reply.code(404).send({ error: '插件不存在' });
       }
       const { values } = request.body as { values: Record<string, unknown> };
       if (!values || typeof values !== 'object') {
-        return reply.status(400).send({ error: '无效的配置数据' });
+        return reply.code(400).send({ error: '无效的配置数据' });
       }
       try {
         pluginManager.setPluginConfigValues(request.params.id, values);
+        auditService.log('plugin_config_update', request.params.id, '更新插件配置', (request.user as { username?: string })?.username, request.ip);
         return { success: true };
       } catch (err) {
-        return reply.status(400).send({ error: String(err instanceof Error ? err.message : err) });
+        return reply.code(400).send({ error: String(err instanceof Error ? err.message : err) });
       }
     },
   );

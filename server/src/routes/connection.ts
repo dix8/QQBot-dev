@@ -50,6 +50,16 @@ export function connectionRoutes(
       return reply.code(400).send({ error: '缺少 action 字段' });
     }
 
+    const DANGEROUS_ACTIONS = new Set([
+      'set_restart', 'clean_cache', 'set_group_leave',
+      'set_friend_add_request', 'set_group_add_request',
+      'delete_msg', 'set_group_kick', 'set_group_ban',
+      'set_group_whole_ban',
+    ]);
+    if (DANGEROUS_ACTIONS.has(action)) {
+      fastify.log.warn({ action, connectionId: request.params.id }, 'Dangerous API action called via proxy');
+    }
+
     try {
       const data = await oneBotClient.callApi(request.params.id, action, params ?? {});
       return { success: true, data };

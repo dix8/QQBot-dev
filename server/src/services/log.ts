@@ -9,11 +9,21 @@ function escapeLike(str: string): string {
 }
 
 export class LogService {
+  private broadcastFn: ((event: string, data: unknown) => void) | null = null;
+
+  setBroadcast(fn: (event: string, data: unknown) => void): void {
+    this.broadcastFn = fn;
+  }
+
   addLog(level: LogLevel, source: LogSource, message: string, details?: string): void {
     const now = nowISO();
-    db.insert(schema.logs)
+    const result = db.insert(schema.logs)
       .values({ level, source, message, details: details ?? null, createdAt: now })
-      .run();
+      .returning()
+      .get();
+    if (this.broadcastFn && level !== 'debug') {
+      this.broadcastFn('log:new', result);
+    }
   }
 
   queryLogs(params: LogQueryParams = {}): LogQueryResult {

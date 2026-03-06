@@ -59,9 +59,10 @@ export function createWsService(logger: FastifyBaseLogger, opts: WsServiceOption
     }
   });
 
-  // When a connection is removed, clean up its pending API requests
+  // When a connection is removed, clean up its pending API requests and event handler state
   connectionManager.on('connection:removed', (id: string, reason?: string) => {
     oneBotClient.handleConnectionRemoved(id);
+    eventHandler.cleanupConnection(id);
     logService.addLog('info', 'connection', `连接已断开: ${id.slice(0, 8)}... (${reason ?? '未知原因'})`);
   });
 

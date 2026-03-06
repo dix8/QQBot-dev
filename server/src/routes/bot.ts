@@ -5,8 +5,10 @@ import type { ConnectionManager } from '../ws/connection-manager.js';
 import type { ReverseWsManager } from '../ws/reverse-ws.js';
 import { ConnectionState } from '../types/onebot.js';
 import type { BotDetail, BotCreatePayload, BotUpdatePayload } from '../types/bot.js';
+import { auditService } from '../services/audit.js';
 import { logService } from '../services/log.js';
 import { messageBufferService } from '../services/message-buffer.js';
+import { configService } from '../services/config.js';
 import { nowDatetime } from '../utils/date.js';
 
 function botDisplayName(bot: { remark: string; selfId: number | null; id: number }): string {
@@ -140,7 +142,7 @@ export function botRoutes(
       return reply.code(400).send({ error: message });
     }
 
-    logService.addLog('info', 'bot', `添加机器人: Bot #${botId} (${wsHost}:${wsPort})`);
+    auditService.log('bot_create', String(botId), `创建机器人 ${wsHost}:${wsPort}`, (request.user as { username?: string })?.username, request.ip);
     return { success: true, id: botId };
   });
 
@@ -207,10 +209,7 @@ export function botRoutes(
         }
       }
 
-      if (changes.length > 0) {
-        logService.addLog('info', 'bot', `更新机器人 [${name}]: ${changes.join(', ')}`);
-      }
-
+      auditService.log('bot_update', String(id), changes.length > 0 ? changes.join(', ') : '更新机器人', (request.user as { username?: string })?.username, request.ip);
       return { success: true };
     },
   );
@@ -229,9 +228,10 @@ export function botRoutes(
 
     const name = botDisplayName(existing);
     await reverseWsManager.stopServer(id);
+    configService.deleteForBot(id);
     db.delete(schema.bots).where(eq(schema.bots.id, id)).run();
     messageBufferService.clearBot(id);
-    logService.addLog('warn', 'bot', `删除机器人 [${name}] (id=${id}, ${existing.wsHost}:${existing.wsPort})`);
+    auditService.log('bot_delete', String(id), `删除机器人 [${name}]`, (request.user as { username?: string })?.username, request.ip);
     return { success: true };
   });
 

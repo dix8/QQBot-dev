@@ -1,0 +1,184 @@
+<script setup lang="ts">
+import { ref, onMounted, watch } from 'vue'
+import { Card, CardContent } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { MessageSquare, Search, ChevronLeft, ChevronRight } from 'lucide-vue-next'
+import { apiFetch } from '@/api/client'
+import { useBotsStore } from '@/stores/bots'
+import BotSelector from '@/components/BotSelector.vue'
+
+interface StoredMessage {
+  id: number
+  botId: number | null
+  messageId: number | null
+  messageType: string
+  groupId: number | null
+  userId: number
+  nickname: string | null
+  rawMessage: string | null
+  time: number
+  createdAt: string
+}
+
+const botsStore = useBotsStore()
+
+const messages = ref<StoredMessage[]>([])
+const total = ref(0)
+const page = ref(1)
+const limit = 50
+const loading = ref(false)
+
+const selectedBotId = ref<number | null>(null)
+const typeFilter = ref('all')
+const groupFilter = ref('')
+const userFilter = ref('')
+const searchText = ref('')
+
+onMounted(async () => {
+  await botsStore.fetchBots()
+  if (botsStore.bots.length > 0) {
+    selectedBotId.value = botsStore.bots[0].id
+  }
+})
+
+watch(selectedBotId, () => {
+  page.value = 1
+  loadMessages()
+})
+
+watch(typeFilter, () => {
+  page.value = 1
+  loadMessages()
+})
+
+async function loadMessages() {
+  if (!selectedBotId.value) return
+  loading.value = true
+  try {
+    const params = new URLSearchParams()
+    params.set('botId', String(selectedBotId.value))
+    params.set('page', String(page.value))
+    params.set('limit', String(limit))
+    if (typeFilter.value !== 'all') params.set('type', typeFilter.value)
+    if (groupFilter.value) params.set('groupId', groupFilter.value)
+    if (userFilter.value) params.set('userId', userFilter.value)
+    if (searchText.value) params.set('search', searchText.value)
+
+    const result = await apiFetch<{ messages: StoredMessage[]; total: number }>(`/api/messages?${params}`)
+    messages.value = result.messages
+    total.value = result.total
+  } catch { /* ignore */ }
+  finally { loading.value = false }
+}
+
+function doSearch() {
+  page.value = 1
+  loadMessages()
+}
+
+const totalPages = () => Math.max(1, Math.ceil(total.value / limit))
+
+function prevPage() {
+  if (page.value > 1) { page.value--; loadMessages() }
+}
+function nextPage() {
+  if (page.value < totalPages()) { page.value++; loadMessages() }
+}
+
+function formatTime(ts: number) {
+  return new Date(ts * 1000).toLocaleString()
+}
+</script>
+
+<template>
+  <div class="max-w-6xl mx-auto space-y-4">
+    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+      <div>
+        <h1 class="text-2xl font-bold flex items-center gap-2">
+          <MessageSquare class="w-6 h-6" />
+          消息记录
+        </h1>
+        <p class="text-sm text-muted-foreground mt-1">查看 Bot 收到的历史消息</p>
+      </div>
+      <BotSelector v-model="selectedBotId" />
+    </div>
+
+    <!-- Filters -->
+    <Card>
+      <CardContent class="p-4">
+        <div class="flex flex-wrap gap-3 items-end">
+          <div class="space-y-1">
+            <label class="text-xs text-muted-foreground">消息类型</label>
+            <Select v-model="typeFilter">
+              <SelectTrigger class="w-28">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">全部</SelectItem>
+                <SelectItem value="group">群聊</SelectItem>
+                <SelectItem value="private">私聊</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div class="space-y-1">
+            <label class="text-xs text-muted-foreground">群号</label>
+            <Input v-model="groupFilter" placeholder="筛选群号" class="w-36" @keyup.enter="doSearch" />
+          </div>
+          <div class="space-y-1">
+            <label class="text-xs text-muted-foreground">用户 QQ</label>
+            <Input v-model="userFilter" placeholder="筛选 QQ" class="w-36" @keyup.enter="doSearch" />
+          </div>
+          <div class="space-y-1 flex-1 min-w-[200px]">
+            <label class="text-xs text-muted-foreground">搜索内容</label>
+            <div class="flex gap-2">
+              <Input v-model="searchText" placeholder="搜索消息内容" @keyup.enter="doSearch" />
+              <Button size="sm" @click="doSearch">
+                <Search class="w-4 h-4" />
+              </Button>
+            </div>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+
+    <!-- Messages -->
+    <Card>
+      <CardContent class="p-0">
+        <div v-if="!selectedBotId" class="py-12 text-center text-sm text-muted-foreground">请先选择机器人</div>
+        <div v-else-if="loading" class="py-12 text-center text-sm text-muted-foreground">加载中...</div>
+        <div v-else-if="messages.length === 0" class="py-12 text-center text-sm text-muted-foreground">暂无消息记录</div>
+        <div v-else class="divide-y">
+          <div v-for="msg in messages" :key="msg.id" class="px-4 py-3 hover:bg-muted/30 transition-colors">
+            <div class="flex items-center gap-2 mb-1">
+              <span class="text-[10px] px-1.5 py-0.5 rounded font-medium"
+                :class="msg.messageType === 'group' ? 'bg-blue-500/10 text-blue-500' : 'bg-green-500/10 text-green-500'">
+                {{ msg.messageType === 'group' ? '群聊' : '私聊' }}
+              </span>
+              <span v-if="msg.groupId" class="text-xs text-muted-foreground">群 {{ msg.groupId }}</span>
+              <span class="text-xs font-medium">{{ msg.nickname || msg.userId }}</span>
+              <span class="text-xs text-muted-foreground">({{ msg.userId }})</span>
+              <span class="ml-auto text-[10px] text-muted-foreground">{{ formatTime(msg.time) }}</span>
+            </div>
+            <p class="text-sm break-all">{{ msg.rawMessage }}</p>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+
+    <!-- Pagination -->
+    <div v-if="total > 0" class="flex items-center justify-between">
+      <span class="text-sm text-muted-foreground">共 {{ total }} 条消息</span>
+      <div class="flex items-center gap-2">
+        <Button variant="outline" size="sm" :disabled="page <= 1" @click="prevPage">
+          <ChevronLeft class="w-4 h-4" />
+        </Button>
+        <span class="text-sm">{{ page }} / {{ totalPages() }}</span>
+        <Button variant="outline" size="sm" :disabled="page >= totalPages()" @click="nextPage">
+          <ChevronRight class="w-4 h-4" />
+        </Button>
+      </div>
+    </div>
+  </div>
+</template>

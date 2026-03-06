@@ -149,6 +149,11 @@ export interface NoticeEvent extends BaseEvent {
   group_id?: number;
   user_id?: number;
   operator_id?: number;
+  target_id?: number;
+  duration?: number;
+  message_id?: number;
+  honor_type?: string;
+  file?: { id?: string; name?: string; size?: number; busid?: number };
   [key: string]: unknown;
 }
 

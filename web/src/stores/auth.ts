@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed } from 'vue'
 import { apiFetch, getToken, setToken, clearToken } from '@/api/client'
+import { startAdminWs, stopAdminWs } from '@/composables/useAdminWs'
 import router from '@/router'
 
 interface LoginResponse {
@@ -24,16 +25,20 @@ export const useAuthStore = defineStore('auth', () => {
       body: JSON.stringify({ username, password }),
     })
     setToken(data.token)
+    startAdminWs()
     return data
   }
 
   function logout() {
+    stopAdminWs()
     clearToken()
     router.push('/login')
   }
 
   async function checkAuth(): Promise<MeResponse> {
-    return apiFetch<MeResponse>('/api/auth/me')
+    const result = await apiFetch<MeResponse>('/api/auth/me')
+    startAdminWs()
+    return result
   }
 
   async function changePassword(currentPassword: string, newPassword: string): Promise<void> {

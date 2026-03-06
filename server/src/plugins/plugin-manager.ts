@@ -43,6 +43,7 @@ export class PluginManager {
   private logger: FastifyBaseLogger;
   private oneBotClient?: OneBotClient;
   private connectionManager?: ConnectionManager;
+  private onPluginAutoDisabled?: (pluginName: string) => void;
 
   constructor(logger: FastifyBaseLogger) {
     this.logger = logger;
@@ -64,6 +65,10 @@ export class PluginManager {
 
   setConnectionManager(cm: ConnectionManager): void {
     this.connectionManager = cm;
+  }
+
+  setAutoDisableCallback(fn: (pluginName: string) => void): void {
+    this.onPluginAutoDisabled = fn;
   }
 
   /** Install preinstalled plugins (once per plugin, respects user deletion) */
@@ -627,6 +632,7 @@ export class PluginManager {
       this.disablingSet.add(plugin.id);
       this.logger.warn({ pluginId: plugin.id }, 'Plugin exceeded max errors, disabling');
       logService.addLog('warn', 'plugin', `插件连续错误过多，已自动禁用: ${plugin.name}`);
+      this.onPluginAutoDisabled?.(plugin.name);
       this.disablePlugin(plugin.id)
         .catch((e) => this.logger.error({ err: e, pluginId: plugin.id }, 'Failed to auto-disable plugin'))
         .finally(() => this.disablingSet.delete(plugin.id));

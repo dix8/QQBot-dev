@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -15,6 +15,7 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog'
 import { useBotsStore } from '@/stores/bots'
+import { useAdminWs } from '@/composables/useAdminWs'
 import { fetchBotWsMessages } from '@/api/bots'
 import { isAuthError } from '@/api/client'
 import { toast } from 'vue-sonner'
@@ -322,7 +323,8 @@ function formatTimeShort(iso?: string) {
   return new Date(iso).toLocaleTimeString()
 }
 
-// Polling
+// WS + fallback polling
+const { connected: wsConnected, on: wsOn, off: wsOff } = useAdminWs()
 let pollTimer: ReturnType<typeof setInterval> | undefined
 const refreshing = ref(false)
 
@@ -335,14 +337,42 @@ async function handleRefresh() {
   }
 }
 
+function onBotStatus() {
+  store.fetchBots()
+}
+
+function startFallbackPolling() {
+  if (pollTimer) return
+  pollTimer = setInterval(() => store.fetchBots(), BOTS_POLL_MS)
+}
+
+function stopFallbackPolling() {
+  if (pollTimer) {
+    clearInterval(pollTimer)
+    pollTimer = undefined
+  }
+}
+
+watch(wsConnected, (connected) => {
+  if (connected) {
+    stopFallbackPolling()
+  } else {
+    startFallbackPolling()
+  }
+})
+
 onMounted(() => {
   store.fetchBots()
-  pollTimer = setInterval(() => store.fetchBots(), BOTS_POLL_MS)
+  wsOn('bot:status', onBotStatus)
+  if (!wsConnected.value) {
+    startFallbackPolling()
+  }
 })
 
 onUnmounted(() => {
-  if (pollTimer) clearInterval(pollTimer)
+  stopFallbackPolling()
   if (messagesPollTimer) clearInterval(messagesPollTimer)
+  wsOff('bot:status', onBotStatus)
 })
 </script>
 
@@ -364,12 +394,16 @@ onUnmounted(() => {
       </div>
     </div>
 
+    <div v-if="store.error" class="text-sm text-destructive py-4">
+      {{ store.error }}
+    </div>
+
     <div v-if="store.loading && store.bots.length === 0" class="text-sm text-muted-foreground">
       加载中...
     </div>
 
     <!-- Empty state -->
-    <div v-if="store.bots.length === 0 && !store.loading" class="text-center py-12">
+    <div v-if="store.bots.length === 0 && !store.loading && !store.error" class="text-center py-12">
       <Bot class="w-12 h-12 mx-auto text-muted-foreground mb-4" />
       <p class="text-muted-foreground">暂无机器人</p>
       <p class="text-sm text-muted-foreground mt-1">

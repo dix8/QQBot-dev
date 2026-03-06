@@ -7,13 +7,14 @@ import { Label } from '@/components/ui/label'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Switch } from '@/components/ui/switch'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import type { AcceptableValue } from 'reka-ui'
+import BotSelector from '@/components/BotSelector.vue'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger, DialogClose } from '@/components/ui/dialog'
 import { Badge } from '@/components/ui/badge'
 import { Textarea } from '@/components/ui/textarea'
 import { useConfigStore } from '@/stores/config'
 import { useBotsStore } from '@/stores/bots'
+import { displayBotName } from '@/utils/bot'
 import type { BasicConfig, MessageConfig, RuntimeConfig, KeywordRule } from '@/types/config'
 import { Download, Upload, Plus, Trash2, Save, Bot, Pencil } from 'lucide-vue-next'
 import { toast } from 'vue-sonner'
@@ -23,6 +24,7 @@ const botsStore = useBotsStore()
 
 const saving = ref(false)
 const selectedBotId = ref<number | null>(null)
+const importInput = ref<HTMLInputElement | null>(null)
 
 // Local editable copies
 const basic = ref<BasicConfig>({ nickname: 'QQBot', masterQQ: [], autoReply: true, autoApproveFriend: false, autoApproveGroup: false, messageScope: 'both', selfCommandEnabled: false, blacklistUsers: [], groupFilterMode: 'none', groupFilterList: [] })
@@ -49,10 +51,6 @@ const newRule = ref<Omit<KeywordRule, 'id'>>({ keyword: '', reply: '', matchType
 // Edit keyword rule dialog
 const showEditRule = ref(false)
 const editRule = ref<KeywordRule>({ id: '', keyword: '', reply: '', matchType: 'contains', enabled: true })
-
-function displayBotName(bot: { id: number; remark: string; nickname: string | null; selfId: number | null }) {
-  return bot.remark || bot.nickname || (bot.selfId ? String(bot.selfId) : `Bot #${bot.id}`)
-}
 
 async function loadBotConfig(botId: number) {
   selectedBotId.value = botId
@@ -254,38 +252,13 @@ const matchTypeLabel: Record<string, string> = {
 
 <template>
   <div class="max-w-4xl mx-auto space-y-6">
-    <div class="flex items-center justify-between">
+    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
       <div>
         <h1 class="text-2xl font-bold">Bot 配置</h1>
         <p class="text-sm text-muted-foreground mt-1">管理每个 Bot 的基础设置、消息规则和运行参数</p>
       </div>
+      <BotSelector v-model="selectedBotId" />
     </div>
-
-    <!-- Bot selector -->
-    <Card>
-      <CardContent class="pt-4">
-        <div class="flex items-center gap-4">
-          <Label class="shrink-0">选择机器人</Label>
-          <Select
-            :model-value="selectedBotId !== null ? String(selectedBotId) : undefined"
-            @update:model-value="(v: AcceptableValue) => { selectedBotId = Number(v) }"
-          >
-            <SelectTrigger class="w-full">
-              <SelectValue placeholder="请选择一个机器人" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem
-                v-for="bot in botsStore.bots"
-                :key="bot.id"
-                :value="String(bot.id)"
-              >
-                {{ displayBotName(bot) }}
-              </SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-      </CardContent>
-    </Card>
 
     <!-- No bots -->
     <div v-if="botsStore.bots.length === 0 && !botsStore.loading" class="text-center py-12">
@@ -295,6 +268,9 @@ const matchTypeLabel: Record<string, string> = {
 
     <!-- Loading -->
     <div v-else-if="configStore.loading" class="text-sm text-muted-foreground">加载配置中...</div>
+
+    <!-- Error -->
+    <div v-else-if="configStore.error" class="text-sm text-destructive">{{ configStore.error }}</div>
 
     <!-- Config tabs -->
     <Tabs v-else-if="selectedBotId" default-value="basic">
@@ -721,7 +697,7 @@ const matchTypeLabel: Record<string, string> = {
                   ref="importInput"
                   @change="handleImport"
                 />
-                <Button variant="outline" @click="($refs.importInput as HTMLInputElement).click()">
+                <Button variant="outline" @click="importInput?.click()">
                   <Upload class="w-4 h-4 mr-1" />
                   导入配置
                 </Button>

@@ -435,7 +435,7 @@ interface PluginCommand {
   command: string;                  // 指令名，如 '/天气'
   description: string;              // 指令说明
   usage?: string;                   // 用法示例，如 '/天气 <城市>'
-  permission: 'all' | 'master';    // all=所有人可用, master=仅主人
+  permission: 'all' | 'master' | 'super_admin';  // all=所有人可用, master=仅主人, super_admin=仅超级管理员
   aliases?: string[];               // 别名列表，同一功能的其他触发指令
 }
 ```
@@ -484,7 +484,7 @@ switch (text) {
 
 **权限自动识别：**
 
-系统会检查指令处理代码中是否包含权限相关逻辑（如 `isMaster`、`masterQQ`、`权限不足` 等），自动设置为 `master` 权限；未检测到权限检查的指令默认为 `all`。
+系统会检查指令处理代码中是否包含权限相关逻辑（如 `isMaster`、`masterQQ`、`权限不足` 等），自动设置为 `master` 权限；未检测到权限检查的指令默认为 `all`。`super_admin` 权限无法自动检测，需在 manifest 中显式声明。
 
 **合并规则：**
 
@@ -526,8 +526,33 @@ interface PluginConfigItem {
   options?: { label: string; value: string | number }[];  // type=select 时必填
   required?: boolean;    // 是否必填（UI 提示用）
   placeholder?: string;  // 输入框占位文字
+  editor?: string;       // 自定义编辑器组件标识（见下方说明）
 }
 ```
+
+### 自定义编辑器（editor 字段）
+
+对于复杂配置项（如 JSON 数组），可通过 `editor` 字段指定前端使用的自定义编辑器组件，替代默认的文本输入框。
+
+目前内置支持的 editor 值：
+
+| editor 值 | 说明 |
+|-----------|------|
+| `scheduled-messages` | 定时消息可视化编辑器，支持单次定时和整点报时两种模式 |
+
+示例：
+
+```json
+{
+  "key": "scheduledMessages",
+  "label": "定时消息配置",
+  "type": "string",
+  "default": "[]",
+  "editor": "scheduled-messages"
+}
+```
+
+未识别的 `editor` 值会回退到默认的文本输入框。
 
 ### 完整示例
 

@@ -13,6 +13,8 @@ export interface PluginConfigItem {
   options?: { label: string; value: string | number }[];
   required?: boolean;
   placeholder?: string;
+  /** Custom editor component identifier (e.g. "scheduled-messages") */
+  editor?: string;
 }
 
 export interface PluginManifest {

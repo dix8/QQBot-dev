@@ -17,6 +17,7 @@ import type { PluginManager } from '../plugins/plugin-manager.js';
 import type { MessageBufferService } from '../services/message-buffer.js';
 import { logService } from '../services/log.js';
 import { statsService } from '../services/stats.js';
+import { messageStoreService } from '../services/message-store.js';
 import { db, schema } from '../db/index.js';
 import { sql, eq } from 'drizzle-orm';
 import type { BasicConfig, MessageConfig, RuntimeConfig } from '../types/config.js';
@@ -53,6 +54,11 @@ export class EventHandler {
 
   setMessageBuffer(mb: MessageBufferService): void {
     this.messageBuffer = mb;
+  }
+
+  /** Clean up state for a disconnected connection */
+  cleanupConnection(connectionId: string): void {
+    this.recentApiSends.delete(connectionId);
   }
 
   /** Record an API-initiated send for source tracking (called from API hook) */
@@ -218,6 +224,9 @@ export class EventHandler {
     }
 
     this.dispatchMessageLogic(connectionId, event);
+
+    const botId = this.botIdResolver?.(connectionId);
+    messageStoreService.store(event, botId);
   }
 
   /** Process keyword auto-reply and plugin dispatch (without buffering) */

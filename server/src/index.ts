@@ -8,7 +8,9 @@ import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import fastifyStatic from '@fastify/static';
 import multipart from '@fastify/multipart';
+import fastifyWebsocket from '@fastify/websocket';
 import { createWsService } from './ws/index.js';
+import { AdminWsManager } from './ws/admin-ws.js';
 import { connectionRoutes } from './routes/connection.js';
 import { authRoutes } from './routes/auth.js';
 import { configRoutes } from './routes/config.js';
@@ -28,6 +30,7 @@ import { db, schema } from './db/index.js';
 import { sql } from 'drizzle-orm';
 import { nowISO } from './utils/date.js';
 import { env } from './config/env.js';
+import { notificationService } from './services/notification.js';
 
 const require = createRequire(import.meta.url);
 const pkg = require('../package.json') as {
@@ -48,6 +51,7 @@ await fastify.register(cors, {
   origin: env.CORS_ORIGIN === '*' ? true : env.CORS_ORIGIN,
 });
 await fastify.register(multipart, { limits: { fileSize: 50 * 1024 * 1024 } });
+await fastify.register(fastifyWebsocket);
 
 // Global error handler — log unexpected errors and return a unified Chinese message
 fastify.setErrorHandler((error: Error & { statusCode?: number }, request, reply) => {
@@ -101,6 +105,10 @@ await pluginManager.installPreinstalledPlugins();
 // Initialize plugins (load all enabled plugins)
 await pluginManager.initialize();
 
+// Admin WebSocket for real-time push to frontend
+const adminWs = new AdminWsManager(fastify.log);
+adminWs.register(fastify);
+
 // REST API routes
 authRoutes(fastify);
 connectionRoutes(fastify, ws.connectionManager, ws.oneBotClient);
@@ -130,26 +138,12 @@ if (fs.existsSync(publicDir)) {
   });
 }
 
-// Health check — basic status for unauthenticated, detailed for authenticated
-fastify.get('/api/health', async (request) => {
-  // Check if the request has a valid JWT (optional auth)
-  let authenticated = false;
-  try {
-    await request.jwtVerify();
-    authenticated = true;
-  } catch {
-    // Not authenticated — return minimal info
-  }
-
-  if (!authenticated) {
-    return { status: 'ok' };
-  }
-
+// Shared helper — compute detailed health info
+function getHealthInfo() {
   const totalMem = os.totalmem();
   const freeMem = os.freemem();
   const usedMem = totalMem - freeMem;
 
-  // Calculate CPU usage from cpus() idle vs total
   const cpus = os.cpus();
   let totalIdle = 0;
   let totalTick = 0;
@@ -160,28 +154,21 @@ fastify.get('/api/health', async (request) => {
   }
   const cpuUsage = cpus.length > 0 ? ((1 - totalIdle / totalTick) * 100) : 0;
 
-  // Bot statistics
   const allBots = db.select().from(schema.bots).all();
-  const totalBots = allBots.length;
-  const enabledBots = allBots.filter(b => b.enabled).length;
-  const connectedBots = allBots.filter(b => {
-    const connId = ws.reverseWsManager.getConnectionId(b.id);
-    return connId && ws.connectionManager.getConnection(connId);
-  }).length;
-
-  // Sum all sent messages across bots
   const msgResult = db.select({ total: sql<number>`coalesce(sum(sent_message_count), 0)` }).from(schema.bots).get();
-  const totalMessagesSent = msgResult?.total ?? 0;
 
   return {
     status: 'ok',
     timestamp: nowISO(),
     connections: ws.connectionManager.getActiveCount(),
-    totalMessagesSent,
+    totalMessagesSent: msgResult?.total ?? 0,
     bots: {
-      total: totalBots,
-      enabled: enabledBots,
-      connected: connectedBots,
+      total: allBots.length,
+      enabled: allBots.filter(b => b.enabled).length,
+      connected: allBots.filter(b => {
+        const connId = ws.reverseWsManager.getConnectionId(b.id);
+        return connId && ws.connectionManager.getConnection(connId);
+      }).length,
     },
     memory: {
       total: totalMem,
@@ -195,11 +182,37 @@ fastify.get('/api/health', async (request) => {
       model: cpus.length > 0 ? cpus[0].model : '',
     },
   };
+}
+
+// Health check — basic status for unauthenticated, detailed for authenticated
+fastify.get('/api/health', async (request) => {
+  let authenticated = false;
+  try {
+    await request.jwtVerify();
+    authenticated = true;
+  } catch { /* not authenticated */ }
+
+  if (!authenticated) return { status: 'ok' };
+  return getHealthInfo();
 });
 
 // Stats API — message statistics for dashboard
-fastify.get('/api/stats', async () => {
-  return statsService.getSnapshot();
+fastify.get<{ Querystring: { range?: string } }>('/api/stats', async (request) => {
+  const snapshot = statsService.getSnapshot();
+  const range = request.query.range;
+  if (range) {
+    const days = range === '30d' ? 30 : range === '7d' ? 7 : 0;
+    if (days > 0) {
+      return { ...snapshot, daily: statsService.getDailyStats(days) };
+    }
+  }
+  return snapshot;
+});
+
+// Notifications API
+fastify.get<{ Querystring: { limit?: string } }>('/api/notifications', async (request) => {
+  const limit = Math.min(parseInt(request.query.limit ?? '50', 10) || 50, 200);
+  return { notifications: notificationService.getRecent(limit) };
 });
 
 // About info — project metadata for the About page
@@ -224,15 +237,57 @@ fastify.get('/api/about', async () => {
   };
 });
 
+statsService.initialize();
+
+// Wire log & notification broadcast to admin WS
+logService.setBroadcast((event, data) => adminWs.broadcast(event, data));
+notificationService.setBroadcast((event, data) => adminWs.broadcast(event, data));
+
+// Periodic broadcast of stats & health to admin WS clients
+const adminBroadcastTimer = setInterval(() => {
+  if (adminWs.clientCount === 0) return;
+  adminWs.broadcast('stats:update', statsService.getSnapshot());
+  adminWs.broadcast('health:update', getHealthInfo());
+}, 5000);
+
+// Push bot status changes + notifications to admin WS
+ws.connectionManager.on('connection:authenticated', (id: string, selfId: number) => {
+  const botId = ws.reverseWsManager.getBotIdByConnectionId(id);
+  adminWs.broadcast('bot:status', { botId, selfId, status: 'connected' });
+  notificationService.add('bot_connected', 'info', 'Bot 已连接', `Bot ${selfId} (ID: ${botId}) 已成功连接`);
+});
+ws.connectionManager.on('connection:removed', (id: string) => {
+  const botId = ws.reverseWsManager.getBotIdByConnectionId(id);
+  adminWs.broadcast('bot:status', { botId, status: 'disconnected' });
+  notificationService.add('bot_disconnected', 'warning', 'Bot 已断开', `Bot (ID: ${botId}) 连接已断开`);
+});
+ws.connectionManager.on('connection:heartbeat-timeout', (id: string) => {
+  const botId = ws.reverseWsManager.getBotIdByConnectionId(id);
+  adminWs.broadcast('bot:status', { botId, status: 'heartbeat_timeout' });
+  notificationService.add('heartbeat_timeout', 'warning', '心跳超时', `Bot (ID: ${botId}) 心跳超时`);
+});
+
+// Plugin auto-disable notification
+pluginManager.setAutoDisableCallback((pluginName) => {
+  notificationService.add('plugin_disabled', 'error', '插件已自动禁用', `插件「${pluginName}」因连续错误被自动禁用`);
+});
+
 logService.addLog('info', 'system', '服务启动');
 
 // Graceful shutdown
 const shutdown = async (signal: string) => {
   fastify.log.info({ signal }, 'Received shutdown signal');
   logService.addLog('info', 'system', `服务关闭: ${signal}`);
-  await pluginManager.unloadAll();
-  await ws.close();
-  await fastify.close();
+  try {
+    clearInterval(adminBroadcastTimer);
+    adminWs.close();
+    statsService.shutdown();
+    await pluginManager.unloadAll();
+    await ws.close();
+    await fastify.close();
+  } catch (err) {
+    fastify.log.error({ err }, 'Error during shutdown');
+  }
   process.exit(0);
 };
 

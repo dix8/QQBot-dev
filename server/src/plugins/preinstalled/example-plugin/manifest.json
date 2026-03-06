@@ -168,8 +168,9 @@
       "label": "定时消息配置",
       "type": "string",
       "default": "[]",
-      "description": "JSON 数组。单条: {\"hour\":8,\"minute\":0,\"group_id\":123456,\"message\":\"早上好\"}；整点报时: {\"type\":\"hourly\",\"group_id\":123456,\"messages\":[\"0点消息\",\"1点消息\",...]}",
-      "placeholder": "[{\"type\":\"hourly\",\"group_id\":123456,\"messages\":[\"零点...\",\"一点...\",...共24条]}]"
+      "description": "支持三种类型：单次定时、整点报时、Cron 表达式（如 */30 * * * *、0 9 * * 1-5）",
+      "placeholder": "[{\"type\":\"cron\",\"cron\":\"0 9 * * 1-5\",\"group_id\":123456,\"message\":\"工作日早安\"}]",
+      "editor": "scheduled-messages"
     },
     {
       "key": "echoMode",

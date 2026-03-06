@@ -6,13 +6,12 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { Badge } from '@/components/ui/badge'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import type { AcceptableValue } from 'reka-ui'
 import { useBotsStore } from '@/stores/bots'
 import { toast } from 'vue-sonner'
 import { RefreshCw, Users, Search, ToggleLeft, ToggleRight } from 'lucide-vue-next'
 import * as groupsApi from '@/api/groups'
 import type { GroupInfo } from '@/api/groups'
+import BotSelector from '@/components/BotSelector.vue'
 
 const botsStore = useBotsStore()
 
@@ -23,10 +22,6 @@ const loading = ref(false)
 const toggling = ref<Set<number>>(new Set())
 const searchQuery = ref('')
 const avatarFailed = ref<Set<number>>(new Set())
-
-function displayBotName(bot: { id: number; remark: string; nickname: string | null; selfId: number | null }) {
-  return bot.remark || bot.nickname || (bot.selfId ? String(bot.selfId) : `Bot #${bot.id}`)
-}
 
 const filteredGroups = computed(() => {
   if (!searchQuery.value.trim()) return groups.value
@@ -101,7 +96,6 @@ onMounted(async () => {
   await botsStore.fetchBots()
   if (botsStore.bots.length > 0) {
     selectedBotId.value = botsStore.bots[0]!.id
-    await loadGroups(selectedBotId.value)
   }
 })
 
@@ -114,36 +108,13 @@ watch(selectedBotId, async (newId) => {
 
 <template>
   <div class="max-w-4xl mx-auto space-y-4 sm:space-y-6">
-    <div>
-      <h1 class="text-xl sm:text-2xl font-bold">群管理</h1>
-      <p class="text-sm text-muted-foreground mt-1">管理 Bot 加入的群聊，控制哪些群可以触发指令</p>
+    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+      <div>
+        <h1 class="text-xl sm:text-2xl font-bold">群管理</h1>
+        <p class="text-sm text-muted-foreground mt-1">管理 Bot 加入的群聊，控制哪些群可以触发指令</p>
+      </div>
+      <BotSelector v-model="selectedBotId" />
     </div>
-
-    <!-- Bot selector -->
-    <Card>
-      <CardContent class="pt-4">
-        <div class="flex items-center gap-4">
-          <Label class="shrink-0">选择机器人</Label>
-          <Select
-            :model-value="selectedBotId !== null ? String(selectedBotId) : undefined"
-            @update:model-value="(v: AcceptableValue) => { selectedBotId = Number(v) }"
-          >
-            <SelectTrigger class="w-full">
-              <SelectValue placeholder="请选择一个机器人" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem
-                v-for="bot in botsStore.bots"
-                :key="bot.id"
-                :value="String(bot.id)"
-              >
-                {{ displayBotName(bot) }}
-              </SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-      </CardContent>
-    </Card>
 
     <!-- No bots -->
     <div v-if="botsStore.bots.length === 0 && !botsStore.loading" class="text-center py-12">

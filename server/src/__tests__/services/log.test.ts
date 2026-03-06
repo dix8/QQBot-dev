@@ -69,11 +69,18 @@ describe('LogService', () => {
       log.addLog('debug', 'system', 'debug msg');
     });
 
-    it('returns all logs with total count', () => {
+    it('returns non-debug logs by default', () => {
       const result = log.queryLogs();
-      expect(result.logs).toHaveLength(5);
-      expect(result.total).toBe(5);
+      expect(result.logs).toHaveLength(4);
+      expect(result.total).toBe(4);
       expect(result.page).toBe(1);
+      result.logs.forEach(l => expect(l.level).not.toBe('debug'));
+    });
+
+    it('returns all logs including debug when level=debug is specified', () => {
+      const result = log.queryLogs({ level: 'debug' });
+      expect(result.logs).toHaveLength(1);
+      expect(result.logs[0].level).toBe('debug');
     });
 
     it('filters by level', () => {
@@ -99,8 +106,8 @@ describe('LogService', () => {
       const all = log.queryLogs();
       const oldestId = Math.min(...all.logs.map((l) => l.id));
       const result = log.queryLogs({ sinceId: oldestId });
-      expect(result.logs).toHaveLength(4);
-      expect(result.total).toBe(4);
+      expect(result.logs).toHaveLength(3);
+      expect(result.total).toBe(3);
     });
 
     it('combines multiple filters', () => {
@@ -114,7 +121,7 @@ describe('LogService', () => {
       const page2 = log.queryLogs({ limit: 2, page: 2 });
       expect(page1.logs).toHaveLength(2);
       expect(page2.logs).toHaveLength(2);
-      expect(page1.total).toBe(5);
+      expect(page1.total).toBe(4);
       // Pages should not overlap
       const page1Ids = page1.logs.map((l) => l.id);
       const page2Ids = page2.logs.map((l) => l.id);

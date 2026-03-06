@@ -1,8 +1,5 @@
-/**
- * In-memory message statistics tracker.
- * Tracks received/sent messages per hour, per group, per user.
- * Data resets on restart — designed for real-time dashboard monitoring.
- */
+import { db, schema } from '../db/index.js';
+import { sql } from 'drizzle-orm';
 
 export interface HourlyBucket {
   /** Hour key: "YYYY-MM-DD HH" */
@@ -17,28 +14,55 @@ export interface RankedEntry {
 }
 
 export interface StatsSnapshot {
-  /** Hourly message trend (last 24 hours) */
   hourly: HourlyBucket[];
-  /** Top active groups by received message count */
   topGroups: RankedEntry[];
-  /** Top active users by received message count */
   topUsers: RankedEntry[];
-  /** Total received since startup */
   totalReceived: number;
-  /** Total sent since startup */
   totalSent: number;
 }
 
-class StatsService {
-  /** hour key -> { received, sent } */
-  private hourly = new Map<string, { received: number; sent: number }>();
-  /** group_id -> count */
-  private groupCounts = new Map<number, number>();
-  /** user_id -> count */
-  private userCounts = new Map<number, number>();
+export interface DailyBucket {
+  date: string;
+  received: number;
+  sent: number;
+}
 
+const FLUSH_INTERVAL_MS = 5 * 60_000;
+
+class StatsService {
+  private hourly = new Map<string, { received: number; sent: number }>();
+  private groupCounts = new Map<number, number>();
+  private userCounts = new Map<number, number>();
   private totalReceived = 0;
   private totalSent = 0;
+
+  private dirtyHours = new Set<string>();
+  private dirtyGroups = new Set<number>();
+  private dirtyUsers = new Set<number>();
+  private flushTimer: ReturnType<typeof setInterval> | null = null;
+
+  initialize(): void {
+    this.loadFromDb();
+    this.flushTimer = setInterval(() => this.flush(), FLUSH_INTERVAL_MS);
+  }
+
+  private loadFromDb(): void {
+    const hourRows = db.select().from(schema.messageStats).all();
+    for (const row of hourRows) {
+      this.hourly.set(row.hour, { received: row.received, sent: row.sent });
+      this.totalReceived += row.received;
+      this.totalSent += row.sent;
+    }
+
+    const rankRows = db.select().from(schema.messageRankings).all();
+    for (const row of rankRows) {
+      if (row.type === 'group') {
+        this.groupCounts.set(row.targetId, row.count);
+      } else if (row.type === 'user') {
+        this.userCounts.set(row.targetId, row.count);
+      }
+    }
+  }
 
   private getCurrentHourKey(): string {
     const now = new Date();
@@ -58,30 +82,32 @@ class StatsService {
     return bucket;
   }
 
-  /** Call when a message event is received */
   recordReceived(groupId?: number, userId?: number): void {
     this.totalReceived++;
-    const bucket = this.getOrCreateHourBucket(this.getCurrentHourKey());
+    const key = this.getCurrentHourKey();
+    const bucket = this.getOrCreateHourBucket(key);
     bucket.received++;
+    this.dirtyHours.add(key);
 
     if (groupId) {
       this.groupCounts.set(groupId, (this.groupCounts.get(groupId) ?? 0) + 1);
+      this.dirtyGroups.add(groupId);
     }
     if (userId) {
       this.userCounts.set(userId, (this.userCounts.get(userId) ?? 0) + 1);
+      this.dirtyUsers.add(userId);
     }
   }
 
-  /** Call when a message is sent by the bot */
   recordSent(): void {
     this.totalSent++;
-    const bucket = this.getOrCreateHourBucket(this.getCurrentHourKey());
+    const key = this.getCurrentHourKey();
+    const bucket = this.getOrCreateHourBucket(key);
     bucket.sent++;
+    this.dirtyHours.add(key);
   }
 
-  /** Get stats snapshot for dashboard */
   getSnapshot(topN = 10): StatsSnapshot {
-    // Collect last 24 hours of hourly buckets
     const now = new Date();
     const hourly: HourlyBucket[] = [];
     for (let i = 23; i >= 0; i--) {
@@ -99,33 +125,92 @@ class StatsService {
       });
     }
 
-    // Prune old hourly entries (keep only last 48 hours)
-    const cutoff = new Date(now.getTime() - 48 * 3600_000);
-    for (const key of this.hourly.keys()) {
-      // key format: "YYYY-MM-DD HH"
-      const d = new Date(key.replace(' ', 'T') + ':00:00');
-      if (d < cutoff) this.hourly.delete(key);
-    }
-
-    // Top groups
     const topGroups = [...this.groupCounts.entries()]
       .sort((a, b) => b[1] - a[1])
       .slice(0, topN)
       .map(([id, count]) => ({ id, count }));
 
-    // Top users
     const topUsers = [...this.userCounts.entries()]
       .sort((a, b) => b[1] - a[1])
       .slice(0, topN)
       .map(([id, count]) => ({ id, count }));
 
-    return {
-      hourly,
-      topGroups,
-      topUsers,
-      totalReceived: this.totalReceived,
-      totalSent: this.totalSent,
-    };
+    return { hourly, topGroups, topUsers, totalReceived: this.totalReceived, totalSent: this.totalSent };
+  }
+
+  /** Query daily aggregated stats from DB for a date range */
+  getDailyStats(days: number): DailyBucket[] {
+    const now = new Date();
+    const start = new Date(now.getTime() - days * 86400_000);
+    const startKey = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}-${String(start.getDate()).padStart(2, '0')}`;
+
+    const rows = db.select({
+      date: sql<string>`substr(${schema.messageStats.hour}, 1, 10)`,
+      received: sql<number>`sum(${schema.messageStats.received})`,
+      sent: sql<number>`sum(${schema.messageStats.sent})`,
+    })
+      .from(schema.messageStats)
+      .where(sql`substr(${schema.messageStats.hour}, 1, 10) >= ${startKey}`)
+      .groupBy(sql`substr(${schema.messageStats.hour}, 1, 10)`)
+      .orderBy(sql`substr(${schema.messageStats.hour}, 1, 10)`)
+      .all();
+
+    return rows.map(r => ({ date: r.date, received: r.received ?? 0, sent: r.sent ?? 0 }));
+  }
+
+  flush(): void {
+    for (const key of this.dirtyHours) {
+      const bucket = this.hourly.get(key);
+      if (!bucket) continue;
+      db.insert(schema.messageStats)
+        .values({ hour: key, received: bucket.received, sent: bucket.sent })
+        .onConflictDoUpdate({
+          target: schema.messageStats.hour,
+          set: { received: bucket.received, sent: bucket.sent },
+        })
+        .run();
+    }
+    this.dirtyHours.clear();
+
+    for (const gid of this.dirtyGroups) {
+      const cnt = this.groupCounts.get(gid) ?? 0;
+      db.insert(schema.messageRankings)
+        .values({ type: 'group', targetId: gid, count: cnt })
+        .onConflictDoUpdate({
+          target: [schema.messageRankings.type, schema.messageRankings.targetId],
+          set: { count: cnt },
+        })
+        .run();
+    }
+    this.dirtyGroups.clear();
+
+    for (const uid of this.dirtyUsers) {
+      const cnt = this.userCounts.get(uid) ?? 0;
+      db.insert(schema.messageRankings)
+        .values({ type: 'user', targetId: uid, count: cnt })
+        .onConflictDoUpdate({
+          target: [schema.messageRankings.type, schema.messageRankings.targetId],
+          set: { count: cnt },
+        })
+        .run();
+    }
+    this.dirtyUsers.clear();
+
+    // Prune hourly data older than 90 days from DB and memory
+    const cutoff = new Date(Date.now() - 90 * 86400_000);
+    const cutoffKey = `${cutoff.getFullYear()}-${String(cutoff.getMonth() + 1).padStart(2, '0')}-${String(cutoff.getDate()).padStart(2, '0')} 00`;
+    db.delete(schema.messageStats).where(sql`${schema.messageStats.hour} < ${cutoffKey}`).run();
+    for (const key of this.hourly.keys()) {
+      if (key < cutoffKey) this.hourly.delete(key);
+    }
+  }
+
+  shutdown(): void {
+    if (this.flushTimer) {
+      clearInterval(this.flushTimer);
+      this.flushTimer = null;
+    }
+    this.flush();
   }
 }
 

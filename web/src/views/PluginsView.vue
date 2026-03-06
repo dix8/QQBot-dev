@@ -14,6 +14,8 @@ import { Upload, Trash2, Puzzle, Terminal, Settings, BookOpen, Github, ChevronDo
 import type { PluginCommand, PluginPermission, PluginInfo, PluginConfigItem } from '@/types/plugin'
 import { fetchPluginConfig, savePluginConfig, fetchPluginReadme } from '@/api/plugins'
 import { marked } from 'marked'
+import DOMPurify from 'dompurify'
+import ScheduledMessageEditor from '@/components/ScheduledMessageEditor.vue'
 
 const store = usePluginsStore()
 
@@ -88,6 +90,7 @@ const groupedCommands = computed<GroupedCommand[]>(() => {
 
 const configDialogOpen = ref(false)
 const configDialogName = ref('')
+const configDialogPluginId = ref('')
 const configDialogSchema = ref<PluginConfigItem[]>([])
 const configDialogValues = ref<Record<string, unknown>>({})
 const configLoading = ref(false)
@@ -216,6 +219,7 @@ function toggleCommandExpand(idx: number) {
 
 async function openConfigDialog(plugin: PluginInfo) {
   configDialogName.value = plugin.name
+  configDialogPluginId.value = plugin.id
   configDialogSchema.value = plugin.configSchema
   configDialogValues.value = {}
   configDialogOpen.value = true
@@ -259,7 +263,7 @@ async function openReadmeDialog(plugin: PluginInfo) {
   readmeLoading.value = true
   try {
     const md = await fetchPluginReadme(plugin.id)
-    readmeHtml.value = await marked(md)
+    readmeHtml.value = DOMPurify.sanitize(await marked(md))
   } catch (e) {
     toast.error(e instanceof Error ? e.message : '加载文档失败')
     readmeDialogOpen.value = false
@@ -539,12 +543,12 @@ async function openReadmeDialog(plugin: PluginInfo) {
 
     <!-- Plugin config dialog -->
     <Dialog v-model:open="configDialogOpen">
-      <DialogContent class="max-w-lg">
+      <DialogContent class="max-w-lg max-h-[85vh] flex flex-col">
         <DialogHeader>
           <DialogTitle>{{ configDialogName }} - 插件配置</DialogTitle>
         </DialogHeader>
         <div v-if="configLoading" class="py-8 text-center text-sm text-muted-foreground">加载中...</div>
-        <div v-else class="space-y-4 py-4 max-h-96 overflow-y-auto">
+        <div v-else class="space-y-4 py-4 overflow-y-auto pr-2">
           <div v-for="item in configDialogSchema" :key="item.key" class="space-y-1.5">
             <Label class="text-sm">
               {{ item.label }}
@@ -552,9 +556,16 @@ async function openReadmeDialog(plugin: PluginInfo) {
             </Label>
             <p v-if="item.description" class="text-xs text-muted-foreground">{{ item.description }}</p>
 
+            <!-- scheduled-messages editor -->
+            <ScheduledMessageEditor
+              v-if="item.editor === 'scheduled-messages'"
+              :model-value="String(configDialogValues[item.key] ?? '[]')"
+              @update:model-value="updateConfigValue(item.key, $event)"
+            />
+
             <!-- string -->
             <Input
-              v-if="item.type === 'string'"
+              v-else-if="item.type === 'string'"
               :model-value="String(configDialogValues[item.key] ?? '')"
               :placeholder="item.placeholder"
               @update:model-value="updateConfigValue(item.key, $event)"
@@ -604,7 +615,7 @@ async function openReadmeDialog(plugin: PluginInfo) {
             <Button variant="outline">取消</Button>
           </DialogClose>
           <Button
-            @click="handleSaveConfig(store.plugins.find(p => p.name === configDialogName)?.id ?? '')"
+            @click="handleSaveConfig(configDialogPluginId)"
             :disabled="configSaving || configLoading"
           >
             {{ configSaving ? '保存中...' : '保存' }}

@@ -47,8 +47,9 @@ export const useLogsStore = defineStore('logs', () => {
       const level = filterLevel.value === 'all' ? undefined : filterLevel.value
       const result = await logsApi.fetchLogsSince(maxId, level)
       if (result.logs.length > 0) {
-        logs.value = [...result.logs.reverse(), ...logs.value].slice(0, limit.value)
-        total.value += result.logs.length
+        const merged = [...result.logs.reverse(), ...logs.value]
+        logs.value = merged.slice(0, limit.value)
+        total.value = Math.max(total.value + result.logs.length, merged.length)
       }
     } catch (e) {
       // Re-throw auth errors so callers can stop polling
@@ -82,10 +83,19 @@ export const useLogsStore = defineStore('logs', () => {
     fetchLogs()
   }
 
+  function pushLog(entry: LogEntry) {
+    if (page.value !== 1) return
+    if (filterSource.value !== 'all' && entry.source !== filterSource.value) return
+    if (filterLevel.value !== 'all' && entry.level !== filterLevel.value) return
+    if (filterSearch.value && !entry.message.includes(filterSearch.value)) return
+    logs.value = [entry, ...logs.value].slice(0, limit.value)
+    total.value++
+  }
+
   return {
     logs, total, page, limit, loading, error,
     filterLevel, filterSource, filterSearch,
-    fetchLogs, pollNewLogs, clear, setPage,
+    fetchLogs, pollNewLogs, pushLog, clear, setPage,
     applyFilter, resetFilters,
   }
 })

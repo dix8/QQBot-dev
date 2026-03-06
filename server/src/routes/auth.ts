@@ -1,6 +1,8 @@
 import type { FastifyInstance } from 'fastify';
+import { auditService } from '../services/audit.js';
 import { authService } from '../services/auth.js';
 import { logService } from '../services/log.js';
+import { notificationService } from '../services/notification.js';
 
 const LOGIN_DELAY_MS = 3000;
 
@@ -16,6 +18,10 @@ function isLoginRateLimited(ip: string): boolean {
   if (!timestamps) return false;
   // Remove expired entries
   timestamps = timestamps.filter((t) => t > cutoff);
+  if (timestamps.length === 0) {
+    loginFailures.delete(ip);
+    return false;
+  }
   loginFailures.set(ip, timestamps);
   return timestamps.length >= LOGIN_RATE_LIMIT_MAX;
 }
@@ -47,6 +53,7 @@ export function authRoutes(fastify: FastifyInstance): void {
     // IP-based rate limit check
     if (isLoginRateLimited(request.ip)) {
       logService.addLog('warn', 'auth', `登录限流: IP ${request.ip} 短时间内失败次数过多`);
+      notificationService.add('login_failed', 'warning', '登录限流', `IP ${request.ip} 短时间内失败次数过多`);
       return reply.code(429).send({ error: '登录失败次数过多，请 5 分钟后再试' });
     }
 
@@ -63,7 +70,7 @@ export function authRoutes(fastify: FastifyInstance): void {
     const token = fastify.jwt.sign({ sub: user.id, username: user.username });
     const changePasswordHint = authService.isDefaultPassword(user.id);
 
-    logService.addLog('info', 'auth', `用户登录成功: ${user.username} (IP: ${request.ip})`);
+    auditService.log('login', user.username, '登录成功', user.username, request.ip);
     return { token, username: user.username, changePasswordHint };
   });
 
@@ -99,7 +106,7 @@ export function authRoutes(fastify: FastifyInstance): void {
       return reply.code(400).send({ error: '当前密码错误' });
     }
 
-    logService.addLog('info', 'auth', `密码修改成功: 用户 "${request.user.username}" (IP: ${request.ip})`);
+    auditService.log('password_change', String(request.user.sub), '修改密码', request.user.username, request.ip);
     return { success: true, message: '密码修改成功' };
   });
 
@@ -123,7 +130,7 @@ export function authRoutes(fastify: FastifyInstance): void {
     // Issue a new token with updated username
     const token = fastify.jwt.sign({ sub: request.user.sub, username: newUsername.trim() });
 
-    logService.addLog('info', 'auth', `用户名修改成功: "${request.user.username}" → "${newUsername.trim()}" (IP: ${request.ip})`);
+    auditService.log('username_change', String(request.user.sub), `"${request.user.username}" → "${newUsername.trim()}"`, request.user.username, request.ip);
     return { success: true, message: '用户名修改成功', token, username: newUsername.trim() };
   });
 }

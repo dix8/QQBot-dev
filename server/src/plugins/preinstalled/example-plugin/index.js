@@ -14,8 +14,40 @@ import {
 } from './modules/query.js';
 import { handleNotice, cacheMessage, clearMessageCache } from './modules/notice.js';
 import { handleMenu, handleFeatureList, handleFeatureToggle } from './modules/features.js';
+import { CronExpressionParser } from 'cron-parser';
 
 const repeatTracker = new Map();
+const lastCronSent = new Map();
+
+const WEEKDAY_NAMES = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+
+function renderTemplate(msg) {
+  const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Shanghai' }));
+  const pad = (n) => String(n).padStart(2, '0');
+  const h = pad(now.getHours());
+  const m = pad(now.getMinutes());
+  const Y = now.getFullYear();
+  const M = pad(now.getMonth() + 1);
+  const D = pad(now.getDate());
+  return msg
+    .replace(/\{time}/g, `${h}:${m}`)
+    .replace(/\{hour}/g, h)
+    .replace(/\{minute}/g, m)
+    .replace(/\{date}/g, `${Y}-${M}-${D}`)
+    .replace(/\{datetime}/g, `${Y}-${M}-${D} ${h}:${m}`)
+    .replace(/\{weekday}/g, WEEKDAY_NAMES[now.getDay()]);
+}
+
+function matchesCron(cronExpr, tz = 'Asia/Shanghai') {
+  try {
+    const expr = CronExpressionParser.parse(cronExpr, { tz });
+    const prev = expr.prev().toDate();
+    const now = new Date();
+    return Math.floor(prev.getTime() / 60000) === Math.floor(now.getTime() / 60000);
+  } catch {
+    return false;
+  }
+}
 
 export default {
   async onLoad(context) {
@@ -39,17 +71,31 @@ export default {
         const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Shanghai' }));
         const hour = now.getHours();
         const minute = now.getMinutes();
-        for (const task of tasks) {
-          if (!task.group_id) continue;
-          if (task.type === 'hourly' && Array.isArray(task.messages)) {
-            const taskMinute = task.minute ?? 0;
-            if (minute === taskMinute && hour >= 0 && hour < task.messages.length && task.messages[hour]) {
-              context.sendMessage('group', task.group_id, task.messages[hour]);
-              context.logger.info(`整点报时已发送到群 ${task.group_id}`);
-            }
+        const nowMinKey = Math.floor(Date.now() / 60000);
+
+        for (let i = 0; i < tasks.length; i++) {
+          const task = tasks[i];
+          const groupIds = Array.isArray(task.group_ids) ? task.group_ids : task.group_id ? [task.group_id] : [];
+          if (groupIds.length === 0) continue;
+
+          const sentKey = `${i}`;
+          if (lastCronSent.get(sentKey) === nowMinKey) continue;
+
+          let shouldSend = false;
+          if (task.type === 'cron' && task.cron && task.message) {
+            shouldSend = matchesCron(task.cron);
           } else if (task.hour === hour && task.minute === minute && task.message) {
-            context.sendMessage('group', task.group_id, task.message);
-            context.logger.info(`定时消息已发送到群 ${task.group_id}`);
+            shouldSend = true;
+          }
+
+          if (shouldSend) {
+            lastCronSent.set(sentKey, nowMinKey);
+            const msg = renderTemplate(task.message);
+            for (const gid of groupIds) {
+              context.sendMessage('group', gid, msg);
+            }
+            const label = task.type === 'cron' ? `Cron (${task.cron})` : '定时';
+            context.logger.info(`${label}消息已发送到 ${groupIds.length} 个群`);
           }
         }
       } catch (err) {

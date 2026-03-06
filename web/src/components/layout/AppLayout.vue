@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -9,6 +9,8 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { useAuthStore } from '@/stores/auth'
 import { useThemeStore } from '@/stores/theme'
+import { useNotificationsStore, type Notification } from '@/stores/notifications'
+import { useAdminWs } from '@/composables/useAdminWs'
 import { getNeedsPasswordChange, setNeedsPasswordChange } from '@/api/client'
 import { toast } from 'vue-sonner'
 import {
@@ -30,15 +32,42 @@ import {
   PanelLeft,
   Shield,
   Users,
+  Bell,
+  MessageSquare,
 } from 'lucide-vue-next'
 import { useSidebarStore } from '@/stores/sidebar'
 
 const auth = useAuthStore()
 const themeStore = useThemeStore()
 const sidebarStore = useSidebarStore()
+const notifStore = useNotificationsStore()
+const { on: wsOn, off: wsOff } = useAdminWs()
 const route = useRoute()
 const sidebarOpen = ref(false)
+const notifOpenDesktop = ref(false)
+const notifOpenMobile = ref(false)
 const displayUsername = ref('管理员')
+
+function onNotification(data: unknown) {
+  const n = data as Notification
+  notifStore.push(n)
+  if (n.severity === 'warning' || n.severity === 'error') {
+    toast[n.severity === 'error' ? 'error' : 'warning'](n.title, { description: n.message })
+  }
+}
+
+function severityColor(severity: string) {
+  if (severity === 'error') return 'text-red-500'
+  if (severity === 'warning') return 'text-yellow-500'
+  return 'text-blue-500'
+}
+
+function formatNotifTime(iso: string) {
+  const d = new Date(iso)
+  const now = new Date()
+  if (d.toDateString() === now.toDateString()) return d.toLocaleTimeString()
+  return d.toLocaleDateString() + ' ' + d.toLocaleTimeString()
+}
 
 const themeIcon = computed(() => {
   if (themeStore.theme === 'light') return Sun
@@ -51,6 +80,7 @@ const navItems = [
   { path: '/bots', label: '机器人', icon: Bot },
   { path: '/groups', label: '群管理', icon: Users },
   { path: '/config', label: 'Bot 配置', icon: Settings },
+  { path: '/messages', label: '消息记录', icon: MessageSquare },
   { path: '/logs', label: '日志', icon: ScrollText },
   { path: '/plugins', label: '插件', icon: Puzzle },
   { path: '/system', label: '系统设置', icon: Shield },
@@ -158,6 +188,8 @@ onMounted(async () => {
   } catch {
     // ignore
   }
+  notifStore.fetchRecent()
+  wsOn('notification', onNotification)
   if (getNeedsPasswordChange()) {
     currentPwd.value = ''
     newPwd.value = ''
@@ -168,6 +200,10 @@ onMounted(async () => {
     forcedPwdChange.value = true
     showChangePwd.value = true
   }
+})
+
+onUnmounted(() => {
+  wsOff('notification', onNotification)
 })
 </script>
 
@@ -195,6 +231,40 @@ onMounted(async () => {
         </div>
         <span v-if="!sidebarStore.collapsed" class="font-semibold text-lg whitespace-nowrap">QQBot 管理</span>
         <div v-if="!sidebarStore.collapsed" class="ml-auto flex items-center gap-1">
+          <!-- Desktop notification bell -->
+          <DropdownMenu v-model:open="notifOpenDesktop">
+            <DropdownMenuTrigger as-child>
+              <button class="relative p-1.5 rounded-md text-muted-foreground hover:bg-muted hover:text-foreground transition-colors hidden lg:block">
+                <Bell class="w-4 h-4" />
+                <span v-if="notifStore.unreadCount > 0"
+                  class="absolute -top-0.5 -right-0.5 w-4 h-4 bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center">
+                  {{ notifStore.unreadCount > 9 ? '9+' : notifStore.unreadCount }}
+                </span>
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent v-if="notifOpenDesktop" align="start" :side-offset="8" class="w-80 max-h-96 overflow-y-auto">
+              <div class="flex items-center justify-between px-3 py-2 border-b">
+                <span class="text-sm font-medium">通知</span>
+                <button v-if="notifStore.unreadCount > 0" class="text-xs text-primary hover:underline" @click="notifStore.markAllRead()">
+                  全部已读
+                </button>
+              </div>
+              <div v-if="notifStore.notifications.length === 0" class="px-3 py-6 text-center text-sm text-muted-foreground">
+                暂无通知
+              </div>
+              <div v-else>
+                <DropdownMenuItem v-for="n in notifStore.notifications.slice(0, 20)" :key="n.id" class="flex-col items-start gap-1 py-2 cursor-default"
+                  :class="{ 'opacity-50': notifStore.isRead(n.id) }">
+                  <div class="flex items-center gap-2 w-full">
+                    <span class="w-1.5 h-1.5 rounded-full shrink-0" :class="severityColor(n.severity).replace('text-', 'bg-')" />
+                    <span class="text-sm font-medium flex-1 truncate">{{ n.title }}</span>
+                    <span class="text-[10px] text-muted-foreground shrink-0">{{ formatNotifTime(n.timestamp) }}</span>
+                  </div>
+                  <span class="text-xs text-muted-foreground pl-3.5 line-clamp-2">{{ n.message }}</span>
+                </DropdownMenuItem>
+              </div>
+            </DropdownMenuContent>
+          </DropdownMenu>
           <DropdownMenu>
             <DropdownMenuTrigger as-child>
               <button class="p-1.5 rounded-md text-muted-foreground hover:bg-muted hover:text-foreground transition-colors hidden lg:block">
@@ -342,24 +412,60 @@ onMounted(async () => {
           <Menu class="w-5 h-5" />
         </button>
         <span class="ml-3 font-semibold">QQBot 管理</span>
-        <DropdownMenu>
-          <DropdownMenuTrigger as-child>
-            <button class="ml-auto p-2">
-              <component :is="themeIcon" class="w-4 h-4" />
-            </button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" :side-offset="8">
-            <DropdownMenuItem class="gap-2" @click="themeStore.setTheme('light')">
-              <Sun class="w-4 h-4" /> 浅色
-            </DropdownMenuItem>
-            <DropdownMenuItem class="gap-2" @click="themeStore.setTheme('dark')">
-              <Moon class="w-4 h-4" /> 深色
-            </DropdownMenuItem>
-            <DropdownMenuItem class="gap-2" @click="themeStore.setTheme('system')">
-              <Monitor class="w-4 h-4" /> 跟随系统
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <div class="ml-auto flex items-center gap-1">
+          <!-- Mobile notification bell -->
+          <DropdownMenu v-model:open="notifOpenMobile">
+            <DropdownMenuTrigger as-child>
+              <button class="relative p-2">
+                <Bell class="w-4 h-4" />
+                <span v-if="notifStore.unreadCount > 0"
+                  class="absolute top-1 right-1 w-4 h-4 bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center">
+                  {{ notifStore.unreadCount > 9 ? '9+' : notifStore.unreadCount }}
+                </span>
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent v-if="notifOpenMobile" align="end" :side-offset="8" class="w-80 max-h-96 overflow-y-auto">
+              <div class="flex items-center justify-between px-3 py-2 border-b">
+                <span class="text-sm font-medium">通知</span>
+                <button v-if="notifStore.unreadCount > 0" class="text-xs text-primary hover:underline" @click="notifStore.markAllRead()">
+                  全部已读
+                </button>
+              </div>
+              <div v-if="notifStore.notifications.length === 0" class="px-3 py-6 text-center text-sm text-muted-foreground">
+                暂无通知
+              </div>
+              <div v-else>
+                <DropdownMenuItem v-for="n in notifStore.notifications.slice(0, 20)" :key="n.id" class="flex-col items-start gap-1 py-2 cursor-default"
+                  :class="{ 'opacity-50': notifStore.isRead(n.id) }">
+                  <div class="flex items-center gap-2 w-full">
+                    <span class="w-1.5 h-1.5 rounded-full shrink-0" :class="severityColor(n.severity).replace('text-', 'bg-')" />
+                    <span class="text-sm font-medium flex-1 truncate">{{ n.title }}</span>
+                    <span class="text-[10px] text-muted-foreground shrink-0">{{ formatNotifTime(n.timestamp) }}</span>
+                  </div>
+                  <span class="text-xs text-muted-foreground pl-3.5 line-clamp-2">{{ n.message }}</span>
+                </DropdownMenuItem>
+              </div>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <DropdownMenu>
+            <DropdownMenuTrigger as-child>
+              <button class="p-2">
+                <component :is="themeIcon" class="w-4 h-4" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" :side-offset="8">
+              <DropdownMenuItem class="gap-2" @click="themeStore.setTheme('light')">
+                <Sun class="w-4 h-4" /> 浅色
+              </DropdownMenuItem>
+              <DropdownMenuItem class="gap-2" @click="themeStore.setTheme('dark')">
+                <Moon class="w-4 h-4" /> 深色
+              </DropdownMenuItem>
+              <DropdownMenuItem class="gap-2" @click="themeStore.setTheme('system')">
+                <Monitor class="w-4 h-4" /> 跟随系统
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
       </header>
 
       <!-- Page content -->

@@ -15,9 +15,9 @@ export async function replyMsg(event, text) {
 export function getAtTarget(event) {
   const message = event.message;
   if (!Array.isArray(message)) return undefined;
-  const atSeg = message.find((seg) => seg.type === 'at' && seg.data.qq !== 'all');
+  const atSeg = message.find((seg) => seg.type === 'at' && seg.data?.qq !== 'all');
   if (atSeg) {
-    const qq = parseInt(String(atSeg.data.qq), 10);
+    const qq = parseInt(String(atSeg.data?.qq), 10);
     return isNaN(qq) ? undefined : qq;
   }
   return undefined;
@@ -37,7 +37,7 @@ export function getReplyMessageId(event) {
   if (!Array.isArray(message)) return undefined;
   const replySeg = message.find((seg) => seg.type === 'reply');
   if (replySeg) {
-    const id = parseInt(String(replySeg.data.id), 10);
+    const id = parseInt(String(replySeg.data?.id), 10);
     return isNaN(id) ? undefined : id;
   }
   return undefined;
