@@ -44,7 +44,8 @@ export const useLogsStore = defineStore('logs', () => {
     }
     const maxId = Math.max(...logs.value.map((l) => l.id))
     try {
-      const result = await logsApi.fetchLogsSince(maxId)
+      const level = filterLevel.value === 'all' ? undefined : filterLevel.value
+      const result = await logsApi.fetchLogsSince(maxId, level)
       if (result.logs.length > 0) {
         logs.value = [...result.logs.reverse(), ...logs.value].slice(0, limit.value)
         total.value += result.logs.length

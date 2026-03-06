@@ -1,6 +1,6 @@
 import { mkdirSync, existsSync, rmSync, cpSync, readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { join, resolve } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { FastifyBaseLogger } from 'fastify';
 import { db, schema } from '../db/index.js';
@@ -33,6 +33,7 @@ interface LoadedPlugin {
   priority: number;
   errorCount: number;
   dispose?: () => void;
+  cacheDir?: string;
 }
 
 export class PluginManager {
@@ -102,7 +103,15 @@ export class PluginManager {
         .get();
 
       if (existing) {
-        // Already installed (or user deleted it) — skip
+        // Already installed — re-sync source files & commands in case they changed
+        const pluginId = (manifest as Record<string, unknown>).id as string | undefined;
+        if (pluginId) {
+          const targetDir = join(env.PLUGINS_DIR, pluginId);
+          if (existsSync(targetDir)) {
+            cpSync(pluginSrcDir, targetDir, { recursive: true });
+          }
+        }
+        this.syncPreinstalledCommands(pluginSrcDir, manifest);
         continue;
       }
 
@@ -120,7 +129,40 @@ export class PluginManager {
     }
   }
 
+  private syncPreinstalledCommands(pluginSrcDir: string, manifest: { name?: string; id?: string; entry?: string; commands?: PluginCommand[] }): void {
+    if (!manifest.id) return;
+    const record = db.select().from(schema.plugins).where(eq(schema.plugins.id, manifest.id)).get();
+    if (!record) return;
+
+    const VALID_CMD_PERMISSIONS = new Set(['all', 'master']);
+    const manifestCommands: PluginCommand[] = (manifest.commands ?? []).filter(
+      (cmd: PluginCommand) => cmd.command && VALID_CMD_PERMISSIONS.has(cmd.permission),
+    );
+
+    const entryFile = manifest.entry ?? record.entryFile;
+    const entryPath = join(pluginSrcDir, entryFile);
+    let finalCommands = manifestCommands;
+    if (existsSync(entryPath)) {
+      const entrySource = readFileSync(entryPath, 'utf-8');
+      const detected = detectCommands(entrySource);
+      finalCommands = mergeCommands(manifestCommands, detected);
+    }
+
+    const newJson = JSON.stringify(finalCommands);
+    if (newJson !== record.commands) {
+      db.update(schema.plugins)
+        .set({ commands: newJson, updatedAt: nowISO() })
+        .where(eq(schema.plugins.id, manifest.id))
+        .run();
+      this.logger.info({ name: manifest.name }, 'Preinstalled plugin commands synced');
+    }
+  }
+
   async initialize(): Promise<void> {
+    const cacheBase = join(env.PLUGINS_DIR, '.cache');
+    rmSync(cacheBase, { recursive: true, force: true });
+    mkdirSync(cacheBase, { recursive: true });
+
     const rows = db.select()
       .from(schema.plugins)
       .where(eq(schema.plugins.enabled, 1))
@@ -274,14 +316,26 @@ export class PluginManager {
     if (!record) throw new Error(`插件不存在: ${id}`);
 
     const pluginDir = join(env.PLUGINS_DIR, id);
-    const entryPath = join(pluginDir, record.entryFile);
-    if (!resolve(entryPath).startsWith(resolve(pluginDir))) {
+    const entryCheck = join(pluginDir, record.entryFile);
+    if (!resolve(entryCheck).startsWith(resolve(pluginDir))) {
       throw new Error('插件入口文件路径非法');
     }
-    if (!existsSync(entryPath)) {
-      throw new Error(`插件入口文件不存在: ${entryPath}`);
+    if (!existsSync(entryCheck)) {
+      throw new Error(`插件入口文件不存在: ${entryCheck}`);
     }
 
+    // Copy to unique cache dir so every file gets a fresh URL, fully bypassing ESM module cache
+    const cacheDir = join(env.PLUGINS_DIR, '.cache', `${id}_${Date.now()}`);
+    const dataDirAbs = resolve(pluginDir, 'data');
+    cpSync(pluginDir, cacheDir, {
+      recursive: true,
+      filter: (src) => {
+        const s = resolve(src);
+        return s !== dataDirAbs && !s.startsWith(dataDirAbs + sep);
+      },
+    });
+
+    const entryPath = join(cacheDir, record.entryFile);
     const entryUrl = pathToFileURL(entryPath).href;
     const mod = await import(entryUrl);
     const instance: PluginInterface = mod.default ?? mod;
@@ -300,6 +354,7 @@ export class PluginManager {
       priority: record.priority,
       errorCount: 0,
       dispose,
+      cacheDir,
     });
 
     this.logger.info({ pluginId: id, name: record.name }, 'Plugin loaded');
@@ -321,6 +376,10 @@ export class PluginManager {
     // Dispose context: clear managed timers + mark context as disposed
     if (plugin.dispose) {
       plugin.dispose();
+    }
+
+    if (plugin.cacheDir) {
+      rmSync(plugin.cacheDir, { recursive: true, force: true });
     }
 
     this.loaded.delete(id);
@@ -355,6 +414,88 @@ export class PluginManager {
     const pluginDir = join(env.PLUGINS_DIR, id);
     rmSync(pluginDir, { recursive: true, force: true });
     logService.addLog('info', 'plugin', `插件已删除: ${id}`);
+  }
+
+  async reloadPlugin(id: string): Promise<void> {
+    const record = db.select().from(schema.plugins).where(eq(schema.plugins.id, id)).get();
+    if (!record) return;
+
+    const wasEnabled = record.enabled === 1;
+    await this.unloadPlugin(id);
+
+    const pluginDir = join(env.PLUGINS_DIR, id);
+    const manifestPath = join(pluginDir, 'manifest.json');
+    if (!existsSync(manifestPath)) throw new Error(`插件 ${record.name}: manifest.json 不存在`);
+
+    let manifest: PluginManifest;
+    try {
+      manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
+    } catch {
+      throw new Error(`插件 ${record.name}: manifest.json 解析失败`);
+    }
+
+    const entryFile = manifest.entry || record.entryFile;
+    const entryPath = join(pluginDir, entryFile);
+    if (!existsSync(entryPath)) throw new Error(`插件 ${record.name}: 入口文件不存在 ${entryFile}`);
+
+    const VALID_PERMISSIONS: Set<string> = new Set(['sendMessage', 'callApi', 'getConfig', 'setConfig']);
+    const permissions = (manifest.permissions ?? []).filter((p: string) =>
+      VALID_PERMISSIONS.has(p),
+    ) as PluginPermission[];
+
+    const VALID_CONFIG_TYPES = new Set(['string', 'number', 'boolean', 'select']);
+    const configSchema: PluginConfigItem[] = (manifest.configSchema ?? []).filter(
+      (item) => item.key && item.label && VALID_CONFIG_TYPES.has(item.type),
+    );
+
+    const VALID_CMD_PERMISSIONS = new Set(['all', 'master']);
+    const commands: PluginCommand[] = (manifest.commands ?? []).filter(
+      (cmd) => cmd.command && VALID_CMD_PERMISSIONS.has(cmd.permission),
+    );
+
+    const entrySource = readFileSync(entryPath, 'utf-8');
+    const detected = detectCommands(entrySource);
+    const finalCommands = mergeCommands(commands, detected);
+
+    const now = nowISO();
+    db.update(schema.plugins)
+      .set({
+        name: manifest.name || record.name,
+        version: manifest.version || record.version,
+        description: manifest.description ?? record.description,
+        author: manifest.author ?? record.author,
+        repo: manifest.repo ?? record.repo ?? null,
+        entryFile,
+        permissions: JSON.stringify(permissions),
+        configSchema: JSON.stringify(configSchema),
+        commands: JSON.stringify(finalCommands),
+        updatedAt: now,
+      })
+      .where(eq(schema.plugins.id, id))
+      .run();
+
+    if (wasEnabled) {
+      await this.loadPlugin(id);
+    }
+
+    logService.addLog('info', 'plugin', `插件已重载: ${manifest.name || record.name}`);
+  }
+
+  async reloadAllPlugins(): Promise<{ total: number; failed: string[] }> {
+    const rows = db.select().from(schema.plugins).all();
+    const failed: string[] = [];
+
+    for (const row of rows) {
+      try {
+        await this.reloadPlugin(row.id);
+      } catch (err) {
+        failed.push(`${row.name}: ${err instanceof Error ? err.message : String(err)}`);
+        this.logger.error({ err, pluginId: row.id }, 'Failed to reload plugin');
+      }
+    }
+
+    logService.addLog('info', 'plugin', `批量重载完成: ${rows.length} 个插件, ${failed.length} 个失败`);
+    return { total: rows.length, failed };
   }
 
   updatePriority(id: string, priority: number): void {
@@ -591,12 +732,18 @@ export class PluginManager {
         if (section === 'superAdmins') {
           return configService.getSuperAdminQQ();
         }
-        // Find the first authenticated connection's botId
+        // Find the first authenticated connection's botId (database ID, not QQ number)
         if (!this.connectionManager) return undefined;
         const connections = this.connectionManager.getAllConnections();
         const activeConn = connections.find((c) => c.state === 'authenticated');
         if (!activeConn?.botInfo?.user_id) return undefined;
-        return configService.get(activeConn.botInfo.user_id, section);
+        const selfId = activeConn.botInfo.user_id;
+        const botRow = db.select({ id: schema.bots.id })
+          .from(schema.bots)
+          .where(eq(schema.bots.selfId, selfId))
+          .get();
+        if (!botRow) return undefined;
+        return configService.get(botRow.id, section);
       },
       setConfig: (key, value) => {
         if (guardDisposed('setConfig')) return;

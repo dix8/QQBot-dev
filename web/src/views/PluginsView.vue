@@ -10,7 +10,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogT
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { usePluginsStore } from '@/stores/plugins'
 import { toast } from 'vue-sonner'
-import { Upload, Trash2, Puzzle, Terminal, Settings, BookOpen, Github, ChevronDown, ChevronRight } from 'lucide-vue-next'
+import { Upload, Trash2, Puzzle, Terminal, Settings, BookOpen, Github, ChevronDown, ChevronRight, RefreshCw } from 'lucide-vue-next'
 import type { PluginCommand, PluginPermission, PluginInfo, PluginConfigItem } from '@/types/plugin'
 import { fetchPluginConfig, savePluginConfig, fetchPluginReadme } from '@/api/plugins'
 import { marked } from 'marked'
@@ -28,6 +28,7 @@ const deleteConfirmId = ref<string | null>(null)
 const deleteConfirmName = ref('')
 const togglingId = ref<string | null>(null)
 const deletingId = ref<string | null>(null)
+const reloading = ref(false)
 
 const commandsDialogOpen = ref(false)
 const commandsDialogName = ref('')
@@ -176,6 +177,24 @@ async function handlePriorityChange(id: string, event: Event) {
   }
 }
 
+async function handleReloadAll() {
+  reloading.value = true
+  try {
+    const result = await store.reloadAll()
+    if (result.failed.length > 0) {
+      toast.warning(`重载完成: ${result.total - result.failed.length}/${result.total} 成功`, {
+        description: result.failed.join('\n'),
+      })
+    } else {
+      toast.success(`已重载全部 ${result.total} 个插件`)
+    }
+  } catch (e) {
+    toast.error(e instanceof Error ? e.message : '重载插件失败')
+  } finally {
+    reloading.value = false
+  }
+}
+
 function formatTime(iso?: string) {
   if (!iso) return '-'
   return new Date(iso).toLocaleString()
@@ -257,13 +276,18 @@ async function openReadmeDialog(plugin: PluginInfo) {
         <h1 class="text-2xl font-bold">插件管理</h1>
         <p class="text-sm text-muted-foreground mt-1">安装、配置和管理 Bot 插件</p>
       </div>
-      <Dialog v-model:open="showUpload">
-        <DialogTrigger as-child>
-          <Button>
-            <Upload class="w-4 h-4 mr-1" />
-            上传插件
-          </Button>
-        </DialogTrigger>
+      <div class="flex items-center gap-2">
+        <Button variant="outline" :disabled="reloading" @click="handleReloadAll">
+          <RefreshCw class="w-4 h-4 mr-1" :class="{ 'animate-spin': reloading }" />
+          {{ reloading ? '重载中...' : '重载插件' }}
+        </Button>
+        <Dialog v-model:open="showUpload">
+          <DialogTrigger as-child>
+            <Button>
+              <Upload class="w-4 h-4 mr-1" />
+              上传插件
+            </Button>
+          </DialogTrigger>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>上传插件</DialogTitle>
@@ -286,7 +310,8 @@ async function openReadmeDialog(plugin: PluginInfo) {
             </Button>
           </DialogFooter>
         </DialogContent>
-      </Dialog>
+        </Dialog>
+      </div>
     </div>
 
     <div v-if="store.loading && store.plugins.length === 0" class="text-sm text-muted-foreground">加载中...</div>

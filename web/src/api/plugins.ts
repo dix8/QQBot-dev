@@ -38,6 +38,10 @@ export async function deletePlugin(id: string): Promise<void> {
   await apiFetch(`/api/plugins/${id}`, { method: 'DELETE' })
 }
 
+export async function reloadAllPlugins(): Promise<{ total: number; failed: string[] }> {
+  return apiFetch<{ total: number; failed: string[] }>('/api/plugins/reload', { method: 'POST' })
+}
+
 export async function fetchPluginConfig(id: string): Promise<{ schema: PluginConfigItem[], values: Record<string, unknown> }> {
   return apiFetch<{ schema: PluginConfigItem[], values: Record<string, unknown> }>(`/api/plugins/${id}/config`)
 }

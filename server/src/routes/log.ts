@@ -24,9 +24,9 @@ export function logRoutes(fastify: FastifyInstance): void {
   });
 
   // GET /api/logs/since/:id — incremental polling
-  fastify.get<{ Params: { id: string } }>('/api/logs/since/:id', async (request) => {
+  fastify.get<{ Params: { id: string }; Querystring: { level?: LogLevel } }>('/api/logs/since/:id', async (request) => {
     const sinceId = parseInt(request.params.id, 10);
-    const logs = logService.getLogsSince(sinceId);
+    const logs = logService.getLogsSince(sinceId, request.query.level);
     return { logs };
   });
 

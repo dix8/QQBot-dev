@@ -13,6 +13,7 @@ import { connectionRoutes } from './routes/connection.js';
 import { authRoutes } from './routes/auth.js';
 import { configRoutes } from './routes/config.js';
 import { logRoutes } from './routes/log.js';
+import { groupRoutes } from './routes/groups.js';
 import { pluginRoutes } from './routes/plugin.js';
 import { botRoutes } from './routes/bot.js';
 import { registerJwt } from './plugins/jwt.js';
@@ -107,6 +108,7 @@ configRoutes(fastify);
 logRoutes(fastify);
 pluginRoutes(fastify, pluginManager);
 botRoutes(fastify, ws.connectionManager, ws.reverseWsManager);
+groupRoutes(fastify, ws.connectionManager, ws.oneBotClient, ws.reverseWsManager);
 
 // Static file serving — serve frontend build in production
 const __dirname = path.dirname(fileURLToPath(import.meta.url));

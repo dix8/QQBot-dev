@@ -241,9 +241,10 @@ export class EventHandler {
           }
 
           // S2: Group filter — whitelist/blacklist mode
-          if (event.message_type === 'group' && basic.groupFilterMode && basic.groupFilterMode !== 'none' && basic.groupFilterList?.length > 0) {
+          if (event.message_type === 'group' && basic.groupFilterMode && basic.groupFilterMode !== 'none') {
             const groupId = event.group_id;
-            const inList = basic.groupFilterList.includes(groupId);
+            const filterList = basic.groupFilterList ?? [];
+            const inList = filterList.includes(groupId);
             if (basic.groupFilterMode === 'whitelist' && !inList) {
               this.logger.debug({ groupId }, 'Group not in whitelist, dropping');
               return;

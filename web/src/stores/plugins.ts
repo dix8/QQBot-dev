@@ -46,5 +46,11 @@ export const usePluginsStore = defineStore('plugins', () => {
     await fetchPlugins()
   }
 
-  return { plugins, loading, fetchPlugins, upload, enable, disable, updatePriority, remove }
+  async function reloadAll() {
+    const result = await pluginsApi.reloadAllPlugins()
+    await fetchPlugins()
+    return result
+  }
+
+  return { plugins, loading, fetchPlugins, upload, enable, disable, updatePriority, remove, reloadAll }
 })

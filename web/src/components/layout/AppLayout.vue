@@ -29,6 +29,7 @@ import {
   PanelLeftClose,
   PanelLeft,
   Shield,
+  Users,
 } from 'lucide-vue-next'
 import { useSidebarStore } from '@/stores/sidebar'
 
@@ -48,6 +49,7 @@ const themeIcon = computed(() => {
 const navItems = [
   { path: '/dashboard', label: '仪表盘', icon: LayoutDashboard },
   { path: '/bots', label: '机器人', icon: Bot },
+  { path: '/groups', label: '群管理', icon: Users },
   { path: '/config', label: 'Bot 配置', icon: Settings },
   { path: '/logs', label: '日志', icon: ScrollText },
   { path: '/plugins', label: '插件', icon: Puzzle },

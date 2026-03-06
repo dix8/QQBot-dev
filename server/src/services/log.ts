@@ -1,5 +1,5 @@
 import { db, schema } from '../db/index.js';
-import { eq, like, gt, and, count, desc, asc, type SQL } from 'drizzle-orm';
+import { eq, ne, like, gt, and, count, desc, asc, type SQL } from 'drizzle-orm';
 import type { LogLevel, LogSource, LogEntry, LogQueryParams, LogQueryResult } from '../types/log.js';
 import { nowISO } from '../utils/date.js';
 
@@ -26,6 +26,8 @@ export class LogService {
 
     if (params.level) {
       conditions.push(eq(schema.logs.level, params.level));
+    } else {
+      conditions.push(ne(schema.logs.level, 'debug'));
     }
     if (params.source) {
       conditions.push(eq(schema.logs.source, params.source));
@@ -67,7 +69,13 @@ export class LogService {
     };
   }
 
-  getLogsSince(sinceId: number): LogEntry[] {
+  getLogsSince(sinceId: number, level?: LogLevel): LogEntry[] {
+    const conditions: SQL[] = [gt(schema.logs.id, sinceId)];
+    if (level) {
+      conditions.push(eq(schema.logs.level, level));
+    } else {
+      conditions.push(ne(schema.logs.level, 'debug'));
+    }
     return db.select({
       id: schema.logs.id,
       level: schema.logs.level,
@@ -77,7 +85,7 @@ export class LogService {
       createdAt: schema.logs.createdAt,
     })
       .from(schema.logs)
-      .where(gt(schema.logs.id, sinceId))
+      .where(and(...conditions))
       .orderBy(asc(schema.logs.id))
       .limit(200)
       .all() as LogEntry[];

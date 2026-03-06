@@ -67,7 +67,7 @@ export const DEFAULT_CONFIG: BotConfigData = {
     messageScope: 'both',
     selfCommandEnabled: false,
     blacklistUsers: [],
-    groupFilterMode: 'none',
+    groupFilterMode: 'whitelist',
     groupFilterList: [],
   },
   message: {

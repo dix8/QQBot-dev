@@ -106,6 +106,12 @@ export function pluginRoutes(fastify: FastifyInstance, pluginManager: PluginMana
     }
   });
 
+  // POST /api/plugins/reload — reload all plugins
+  fastify.post('/api/plugins/reload', async () => {
+    const result = await pluginManager.reloadAllPlugins();
+    return result;
+  });
+
   // PUT /api/plugins/:id/priority
   fastify.put<{ Params: { id: string }; Body: { priority: number } }>(
     '/api/plugins/:id/priority',

@@ -18,8 +18,9 @@ export async function fetchLogs(params: {
   return apiFetch<LogQueryResult>(`/api/logs${qs ? '?' + qs : ''}`)
 }
 
-export async function fetchLogsSince(sinceId: number): Promise<{ logs: LogEntry[] }> {
-  return apiFetch<{ logs: LogEntry[] }>(`/api/logs/since/${sinceId}`)
+export async function fetchLogsSince(sinceId: number, level?: LogLevel): Promise<{ logs: LogEntry[] }> {
+  const qs = level ? `?level=${level}` : ''
+  return apiFetch<{ logs: LogEntry[] }>(`/api/logs/since/${sinceId}${qs}`)
 }
 
 export async function clearLogs(): Promise<void> {

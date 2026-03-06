@@ -190,7 +190,8 @@ function escapeRegex(str: string): string {
  * - 指令列表 = manifest ∪ detected（按 command 去重）
  * - description：manifest 有则用，否则空字符串
  * - usage：仅来自 manifest
- * - permission：detected 优先 → manifest → 'all'
+ * - permission：manifest 优先 → detected → 'all'
+ *   （manifest 是开发者显式声明，比代码扫描更准确）
  */
 export function mergeCommands(
   manifestCommands: PluginCommand[] | undefined,
@@ -203,13 +204,10 @@ export function mergeCommands(
     result.set(cmd.command, { ...cmd });
   }
 
-  // 合并 detected
+  // 合并 detected（仅补充 manifest 中没有的指令）
   for (const det of detected) {
     const existing = result.get(det.command);
-    if (existing) {
-      // detected 权限优先
-      existing.permission = det.permission;
-    } else {
+    if (!existing) {
       result.set(det.command, {
         command: det.command,
         description: '',
