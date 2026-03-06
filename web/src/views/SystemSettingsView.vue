@@ -105,7 +105,7 @@ async function loadAuditLogs() {
     const result = await apiFetch<{ logs: AuditEntry[]; total: number }>(`/api/audit-logs?page=${auditPage.value}&limit=20`)
     auditLogs.value = result.logs
     auditTotal.value = result.total
-  } catch { /* ignore */ }
+  } catch { toast.error('加载审计日志失败') }
   finally { auditLoading.value = false }
 }
 

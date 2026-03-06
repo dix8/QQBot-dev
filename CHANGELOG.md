@@ -4,6 +4,25 @@
 
 ---
 
+## [0.4.4] - 2026-03-07
+
+### 修复
+
+- 修复 `manifest.json` 定时消息 placeholder 使用旧 `group_id` 格式（已更新为 `group_ids` 数组）
+- 修复消息记录页面加载失败无任何提示（空 catch 块），现在会显示 Toast 错误
+- 修复审计日志页面加载失败无提示（空 catch 块）
+- 修复消息记录页面 QQ 头像加载失败后 fallback 仍可能显示破图，改为显示灰色占位
+- 修复定时任务编辑器群号输入部分无效时无反馈，现在会提示已忽略的无效项
+
+### 优化
+
+- 定时任务允许保存空群号/空消息的任务，卡片显示半透明 + 红色「未启用」badge
+- Admin WebSocket 连接失败和消息解析异常添加 `console.warn` 日志
+- 通知 Store 的 localStorage 和 API 错误添加 `console.warn` 日志
+- 简化 `ScheduledMessageEditor` 类型断言，移除不必要的双重转换
+
+---
+
 ## [0.4.3] - 2026-03-07
 
 ### 新功能

@@ -17,7 +17,7 @@ function loadReadIds(): Set<number> {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
     if (raw) return new Set(JSON.parse(raw) as number[])
-  } catch { /* ignore */ }
+  } catch (e) { console.warn('[Notifications] loadReadIds failed:', e) }
   return new Set()
 }
 
@@ -25,7 +25,7 @@ function saveReadIds(ids: Set<number>) {
   try {
     const arr = [...ids].slice(-500)
     localStorage.setItem(STORAGE_KEY, JSON.stringify(arr))
-  } catch { /* ignore */ }
+  } catch (e) { console.warn('[Notifications] saveReadIds failed:', e) }
 }
 
 export const useNotificationsStore = defineStore('notifications', () => {
@@ -42,7 +42,7 @@ export const useNotificationsStore = defineStore('notifications', () => {
     try {
       const result = await apiFetch<{ notifications: Notification[] }>('/api/notifications?limit=50')
       notifications.value = result.notifications
-    } catch { /* ignore */ }
+    } catch (e) { console.warn('[Notifications] fetchRecent failed:', e) }
   }
 
   function push(notification: Notification) {

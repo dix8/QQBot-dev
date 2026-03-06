@@ -133,7 +133,7 @@ function validateCron(expr: string): string {
 watch(() => props.modelValue, (val) => {
   try {
     const parsed = JSON.parse(val || '[]')
-    tasks.value = Array.isArray(parsed) ? (parsed as Record<string, unknown>[]).map(normalizeTask) as unknown as ScheduledTask[] : []
+    tasks.value = Array.isArray(parsed) ? parsed.map((t: Record<string, unknown>) => normalizeTask(t)) as ScheduledTask[] : []
   } catch {
     tasks.value = []
   }
@@ -151,10 +151,18 @@ function getTaskMessages(task: ScheduledTask): string[] {
 }
 
 function formatGroups(ids: (number | 'all')[]): string {
+  if (!ids || ids.length === 0) return '未设置群'
   if (ids.includes('all')) return '所有启用群'
   const nums = ids.filter((id): id is number => typeof id === 'number')
+  if (nums.length === 0) return '未设置群'
   if (nums.length <= 2) return nums.join('、')
   return `${nums[0]} 等 ${nums.length} 个群`
+}
+
+function isTaskEnabled(task: ScheduledTask): boolean {
+  if (!task.group_ids || task.group_ids.length === 0) return false
+  if (getTaskMessages(task).length === 0) return false
+  return true
 }
 
 function taskSummary(task: ScheduledTask): string {
@@ -292,11 +300,13 @@ function openEdit(index: number) {
 /** 解析群号输入，支持 "all" 和数字 */
 function parseGroupIds(input: string): (number | 'all')[] {
   const trimmed = input.trim().toLowerCase()
+  if (!trimmed) return []
   if (trimmed === 'all' || trimmed === '全部' || trimmed === '所有群') return ['all']
-  const nums = input
-    .split(/[,，\s]+/)
-    .map(s => parseInt(s.trim(), 10))
-    .filter(n => n > 0 && !isNaN(n))
+  const parts = input.split(/[,，\s]+/).filter(Boolean)
+  const nums = parts.map(s => parseInt(s.trim(), 10)).filter(n => n > 0 && !isNaN(n))
+  if (nums.length > 0 && nums.length < parts.length) {
+    toast.warning(`部分群号无效，已忽略 ${parts.length - nums.length} 项`)
+  }
   return nums
 }
 
@@ -320,7 +330,6 @@ function saveTask() {
   }
 
   const gids = parseGroupIds(editGroupIds.value)
-  if (gids.length === 0) { toast.error('请输入有效的目标群号'); return }
 
   const msgs = editMessages.value.map(m => m.trim()).filter(Boolean)
   if (msgs.length === 0) { toast.error('请输入至少一条消息内容'); return }
@@ -380,14 +389,15 @@ const cronDescription = computed(() => editCron.value ? describeCron(editCron.va
       暂未配置定时任务
     </div>
     <div v-else class="space-y-2">
-      <Card v-for="(task, i) in tasks" :key="i" class="overflow-hidden">
+      <Card v-for="(task, i) in tasks" :key="i" class="overflow-hidden" :class="!isTaskEnabled(task) && 'opacity-50'">
         <CardContent class="p-3 flex items-center justify-between gap-2">
           <div class="flex items-center gap-2 min-w-0">
             <Clock class="w-4 h-4 text-muted-foreground shrink-0" />
             <div class="min-w-0">
               <div class="flex items-center gap-1.5">
                 <span class="text-[10px] px-1.5 py-0.5 rounded font-medium bg-muted text-muted-foreground">{{ taskBadge(task) }}</span>
-                <span v-if="getTaskMessages(task).length > 1" class="text-[10px] px-1.5 py-0.5 rounded font-medium bg-blue-500/10 text-blue-500">随机{{ getTaskMessages(task).length }}条</span>
+                <span v-if="!isTaskEnabled(task)" class="text-[10px] px-1.5 py-0.5 rounded font-medium bg-destructive/10 text-destructive">未启用</span>
+                <span v-else-if="getTaskMessages(task).length > 1" class="text-[10px] px-1.5 py-0.5 rounded font-medium bg-blue-500/10 text-blue-500">随机{{ getTaskMessages(task).length }}条</span>
                 <p class="text-sm font-medium truncate">{{ taskSummary(task) }}</p>
               </div>
               <p v-if="task.type === 'cron'" class="text-xs text-muted-foreground truncate">

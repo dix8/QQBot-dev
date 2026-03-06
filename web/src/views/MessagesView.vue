@@ -7,6 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { MessageSquare, Search, ChevronLeft, ChevronRight } from 'lucide-vue-next'
 import { apiFetch } from '@/api/client'
 import { useBotsStore } from '@/stores/bots'
+import { toast } from 'vue-sonner'
 import BotSelector from '@/components/BotSelector.vue'
 
 interface StoredMessage {
@@ -69,7 +70,7 @@ async function loadMessages() {
     const result = await apiFetch<{ messages: StoredMessage[]; total: number }>(`/api/messages?${params}`)
     messages.value = result.messages
     total.value = result.total
-  } catch { /* ignore */ }
+  } catch (e) { toast.error('加载消息失败') }
   finally { loading.value = false }
 }
 
@@ -159,12 +160,14 @@ function formatTime(ts: number) {
           <div v-for="msg in messages" :key="msg.id" class="px-3 sm:px-4 py-3 hover:bg-muted/30 transition-colors">
             <div class="flex gap-2.5">
               <!-- Avatar -->
-              <img
-                :src="`https://q1.qlogo.cn/g?b=qq&nk=${msg.userId}&s=100`"
-                class="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-muted shrink-0 mt-0.5"
-                loading="lazy"
-                @error="($event.target as HTMLImageElement).src = `https://q1.qlogo.cn/g?b=qq&nk=10000&s=100`"
-              />
+              <div class="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-muted shrink-0 mt-0.5 overflow-hidden flex items-center justify-center text-xs text-muted-foreground">
+                <img
+                  :src="`https://q1.qlogo.cn/g?b=qq&nk=${msg.userId}&s=100`"
+                  class="w-full h-full object-cover"
+                  loading="lazy"
+                  @error="($event.target as HTMLImageElement).style.display = 'none'"
+                />
+              </div>
               <!-- Content -->
               <div class="flex-1 min-w-0">
                 <!-- Header -->

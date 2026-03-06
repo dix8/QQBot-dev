@@ -168,8 +168,8 @@
       "label": "定时消息配置",
       "type": "string",
       "default": "[]",
-      "description": "支持三种类型：单次定时、整点报时、Cron 表达式（如 */30 * * * *、0 9 * * 1-5）",
-      "placeholder": "[{\"type\":\"cron\",\"cron\":\"0 9 * * 1-5\",\"group_id\":123456,\"message\":\"工作日早安\"}]",
+      "description": "支持单次定时和 Cron 表达式两种模式，群号填 all 发送到所有启用群，支持多条随机消息",
+      "placeholder": "[{\"type\":\"cron\",\"cron\":\"0 9 * * 1-5\",\"group_ids\":[\"all\"],\"message\":\"工作日早安\"}]",
       "editor": "scheduled-messages"
     },
     {

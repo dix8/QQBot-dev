@@ -26,7 +26,7 @@ function handleMessage(ev: MessageEvent) {
     if (cbs) {
       for (const cb of cbs) cb(data)
     }
-  } catch { /* ignore malformed */ }
+  } catch (e) { console.warn('[AdminWs] malformed message:', e) }
 }
 
 function connect() {
@@ -39,7 +39,8 @@ function connect() {
 
   try {
     socket = new WebSocket(getWsUrl())
-  } catch {
+  } catch (e) {
+    console.warn('[AdminWs] connect failed:', e)
     scheduleReconnect()
     return
   }
