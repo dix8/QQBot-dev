@@ -6,31 +6,36 @@ import { Label } from '@/components/ui/label'
 import { Card, CardContent } from '@/components/ui/card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogClose } from '@/components/ui/dialog'
-import { Plus, Trash2, Pencil, Clock } from 'lucide-vue-next'
+import { Plus, Trash2, Pencil, Clock, Code, Eye } from 'lucide-vue-next'
+import { toast } from 'vue-sonner'
 
 interface SingleTask {
   type?: undefined
   hour: number
   minute: number
-  group_ids: number[]
-  message: string
+  group_ids: (number | 'all')[]
+  message?: string
+  messages?: string[]
 }
 
 interface CronTask {
   type: 'cron'
   cron: string
-  group_ids: number[]
-  message: string
+  group_ids: (number | 'all')[]
+  message?: string
+  messages?: string[]
 }
 
 type ScheduledTask = SingleTask | CronTask
 
 // 兼容旧格式 group_id -> group_ids
 function normalizeTask(raw: Record<string, unknown>): Record<string, unknown> {
-  if (!raw.group_ids && raw.group_id) {
-    return { ...raw, group_ids: [raw.group_id] }
+  const result = { ...raw }
+  if (!result.group_ids && result.group_id) {
+    result.group_ids = [result.group_id]
+    delete result.group_id
   }
-  return raw
+  return result
 }
 
 const props = defineProps<{ modelValue: string }>()
@@ -43,9 +48,12 @@ const editType = ref<'single' | 'cron'>('single')
 const editGroupIds = ref('')
 const editHour = ref(8)
 const editMinute = ref(0)
-const editMessage = ref('')
+const editMessages = ref<string[]>([''])
 const editCron = ref('0 9 * * *')
 const cronError = ref('')
+const editMode = ref<'visual' | 'code'>('visual')
+const editCode = ref('')
+const codeError = ref('')
 
 const CRON_PRESETS = [
   { label: '每天 9:00', value: '0 9 * * *' },
@@ -56,6 +64,8 @@ const CRON_PRESETS = [
   { label: '每 30 分钟', value: '*/30 * * * *' },
   { label: '每月 1 号 9:00', value: '0 9 1 * *' },
 ]
+
+const TEMPLATE_VARS = `可用变量：{time} 时:分　{hour} 时　{minute} 分　{date} 日期　{datetime} 日期时间　{weekday} 星期`
 
 function describeCron(expr: string): string {
   const parts = expr.trim().split(/\s+/)
@@ -114,7 +124,7 @@ function validateCron(expr: string): string {
   for (let i = 0; i < 5; i++) {
     const p = parts[i]!
     if (p === '*') continue
-    const valid = /^(\*|[0-9]+(-[0-9]+)?(\/[0-9]+)?)(,(\*|[0-9]+(-[0-9]+)?(\/[0-9]+)?))*$/.test(p)
+    const valid = /^(\*(\/[0-9]+)?|[0-9]+(-[0-9]+)?(\/[0-9]+)?)(,(\*(\/[0-9]+)?|[0-9]+(-[0-9]+)?(\/[0-9]+)?))*$/.test(p)
     if (!valid) return `${ranges[i]!.name} 字段格式无效: ${p}`
   }
   return ''
@@ -133,9 +143,18 @@ function serialize() {
   emit('update:modelValue', JSON.stringify(tasks.value))
 }
 
-function formatGroups(ids: number[]): string {
-  if (ids.length <= 2) return ids.join('、')
-  return `${ids[0]} 等 ${ids.length} 个群`
+/** 获取任务的消息列表（兼容 message / messages 两种格式） */
+function getTaskMessages(task: ScheduledTask): string[] {
+  if (Array.isArray(task.messages) && task.messages.length > 0) return task.messages
+  if (task.message) return [task.message]
+  return []
+}
+
+function formatGroups(ids: (number | 'all')[]): string {
+  if (ids.includes('all')) return '所有启用群'
+  const nums = ids.filter((id): id is number => typeof id === 'number')
+  if (nums.length <= 2) return nums.join('、')
+  return `${nums[0]} 等 ${nums.length} 个群`
 }
 
 function taskSummary(task: ScheduledTask): string {
@@ -146,9 +165,88 @@ function taskSummary(task: ScheduledTask): string {
   return `${String(task.hour).padStart(2, '0')}:${String(task.minute).padStart(2, '0')} -> ${groups}`
 }
 
+function taskMsgPreview(task: ScheduledTask): string {
+  const msgs = getTaskMessages(task)
+  if (msgs.length === 0) return ''
+  if (msgs.length === 1) return msgs[0]!
+  return `${msgs[0]} (共 ${msgs.length} 条随机)`
+}
+
 function taskBadge(task: ScheduledTask): string {
   if (task.type === 'cron') return 'Cron'
   return '定时'
+}
+
+/** 将当前表单状态序列化为 JSON */
+function formToJson(): string {
+  const gids = parseGroupIds(editGroupIds.value)
+  const msgs = editMessages.value.map(m => m.trim()).filter(Boolean)
+  const msgFields: Record<string, unknown> = msgs.length === 1
+    ? { message: msgs[0] }
+    : msgs.length > 1
+      ? { messages: msgs }
+      : {}
+
+  let task: Record<string, unknown>
+  if (editType.value === 'cron') {
+    task = { type: 'cron', cron: editCron.value.trim(), group_ids: gids, ...msgFields }
+  } else {
+    task = { hour: editHour.value, minute: editMinute.value, group_ids: gids, ...msgFields }
+  }
+  return JSON.stringify(task, null, 2)
+}
+
+/** 从 JSON 解析并填充表单 */
+function jsonToForm(json: string): boolean {
+  try {
+    const raw = JSON.parse(json)
+    if (typeof raw !== 'object' || raw === null) return false
+    const task = normalizeTask(raw)
+
+    if (task.type === 'cron') {
+      editType.value = 'cron'
+      editCron.value = String(task.cron || '0 9 * * *')
+    } else {
+      editType.value = 'single'
+      editHour.value = Number(task.hour ?? 8)
+      editMinute.value = Number(task.minute ?? 0)
+    }
+
+    const gids = task.group_ids as (number | 'all')[] | undefined
+    if (Array.isArray(gids) && gids.length > 0) {
+      editGroupIds.value = gids.includes('all') ? 'all' : gids.filter((id): id is number => typeof id === 'number').join(', ')
+    } else {
+      editGroupIds.value = ''
+    }
+
+    const msgs: string[] = []
+    if (Array.isArray(task.messages) && (task.messages as string[]).length > 0) {
+      msgs.push(...(task.messages as string[]))
+    } else if (task.message) {
+      msgs.push(String(task.message))
+    }
+    editMessages.value = msgs.length > 0 ? msgs : ['']
+    cronError.value = ''
+    return true
+  } catch {
+    return false
+  }
+}
+
+function switchToCode() {
+  editCode.value = formToJson()
+  codeError.value = ''
+  editMode.value = 'code'
+}
+
+function switchToVisual() {
+  if (jsonToForm(editCode.value)) {
+    codeError.value = ''
+    editMode.value = 'visual'
+  } else {
+    codeError.value = 'JSON 格式无效，无法切换到可视化模式'
+    toast.error('JSON 格式无效，无法切换')
+  }
 }
 
 function openAdd() {
@@ -157,9 +255,11 @@ function openAdd() {
   editGroupIds.value = ''
   editHour.value = 8
   editMinute.value = 0
-  editMessage.value = ''
+  editMessages.value = ['']
   editCron.value = '0 9 * * *'
   cronError.value = ''
+  editMode.value = 'visual'
+  codeError.value = ''
   editOpen.value = true
 }
 
@@ -168,50 +268,85 @@ function openEdit(index: number) {
   if (!task) return
   editIndex.value = index
   cronError.value = ''
-  editGroupIds.value = task.group_ids.join(', ')
+  editMode.value = 'visual'
+  codeError.value = ''
+  // group_ids -> 编辑字符串
+  if (task.group_ids.includes('all')) {
+    editGroupIds.value = 'all'
+  } else {
+    editGroupIds.value = task.group_ids.filter((id): id is number => typeof id === 'number').join(', ')
+  }
+  // messages
+  editMessages.value = getTaskMessages(task).length > 0 ? [...getTaskMessages(task)] : ['']
   if (task.type === 'cron') {
     editType.value = 'cron'
     editCron.value = task.cron
-    editMessage.value = task.message
   } else {
     editType.value = 'single'
     editHour.value = task.hour
     editMinute.value = task.minute
-    editMessage.value = task.message
   }
   editOpen.value = true
 }
 
-function parseGroupIds(input: string): number[] {
-  return input
+/** 解析群号输入，支持 "all" 和数字 */
+function parseGroupIds(input: string): (number | 'all')[] {
+  const trimmed = input.trim().toLowerCase()
+  if (trimmed === 'all' || trimmed === '全部' || trimmed === '所有群') return ['all']
+  const nums = input
     .split(/[,，\s]+/)
     .map(s => parseInt(s.trim(), 10))
     .filter(n => n > 0 && !isNaN(n))
+  return nums
+}
+
+function addMessage() {
+  editMessages.value.push('')
+}
+
+function removeMessage(index: number) {
+  if (editMessages.value.length <= 1) return
+  editMessages.value.splice(index, 1)
 }
 
 function saveTask() {
+  // 代码模式：先解析 JSON 回填表单
+  if (editMode.value === 'code') {
+    if (!jsonToForm(editCode.value)) {
+      codeError.value = 'JSON 格式无效'
+      toast.error('JSON 格式无效')
+      return
+    }
+  }
+
   const gids = parseGroupIds(editGroupIds.value)
-  if (gids.length === 0) return
+  if (gids.length === 0) { toast.error('请输入有效的目标群号'); return }
+
+  const msgs = editMessages.value.map(m => m.trim()).filter(Boolean)
+  if (msgs.length === 0) { toast.error('请输入至少一条消息内容'); return }
+
+  // 构造 message/messages 字段（单条用 message 兼容旧格式，多条用 messages）
+  const msgFields = msgs.length === 1
+    ? { message: msgs[0] }
+    : { messages: msgs }
 
   let task: ScheduledTask
   if (editType.value === 'cron') {
     const err = validateCron(editCron.value)
-    if (err) { cronError.value = err; return }
-    if (!editMessage.value.trim()) return
+    if (err) { cronError.value = err; toast.error(err); return }
     task = {
       type: 'cron',
       cron: editCron.value.trim(),
       group_ids: gids,
-      message: editMessage.value.trim(),
-    }
+      ...msgFields,
+    } as CronTask
   } else {
-    if (!editMessage.value.trim()) return
     task = {
       hour: editHour.value,
       minute: editMinute.value,
       group_ids: gids,
-      message: editMessage.value.trim(),
-    }
+      ...msgFields,
+    } as SingleTask
   }
 
   if (editIndex.value >= 0) {
@@ -252,12 +387,13 @@ const cronDescription = computed(() => editCron.value ? describeCron(editCron.va
             <div class="min-w-0">
               <div class="flex items-center gap-1.5">
                 <span class="text-[10px] px-1.5 py-0.5 rounded font-medium bg-muted text-muted-foreground">{{ taskBadge(task) }}</span>
+                <span v-if="getTaskMessages(task).length > 1" class="text-[10px] px-1.5 py-0.5 rounded font-medium bg-blue-500/10 text-blue-500">随机{{ getTaskMessages(task).length }}条</span>
                 <p class="text-sm font-medium truncate">{{ taskSummary(task) }}</p>
               </div>
               <p v-if="task.type === 'cron'" class="text-xs text-muted-foreground truncate">
-                <code class="text-[10px] bg-muted px-1 rounded mr-1">{{ task.cron }}</code>{{ task.message }}
+                <code class="text-[10px] bg-muted px-1 rounded mr-1">{{ task.cron }}</code>{{ taskMsgPreview(task) }}
               </p>
-              <p v-else class="text-xs text-muted-foreground truncate">{{ task.message }}</p>
+              <p v-else class="text-xs text-muted-foreground truncate">{{ taskMsgPreview(task) }}</p>
             </div>
           </div>
           <div class="flex items-center gap-1 shrink-0">
@@ -280,10 +416,26 @@ const cronDescription = computed(() => editCron.value ? describeCron(editCron.va
     <Dialog v-model:open="editOpen">
       <DialogContent class="max-w-lg max-h-[85vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>{{ editIndex >= 0 ? '编辑' : '添加' }}定时任务</DialogTitle>
+          <div class="flex items-center justify-between pr-6">
+            <DialogTitle>{{ editIndex >= 0 ? '编辑' : '添加' }}定时任务</DialogTitle>
+            <div class="flex items-center rounded-md border p-0.5 gap-0.5">
+              <button
+                class="flex items-center gap-1 px-2 py-1 rounded text-xs transition-colors"
+                :class="editMode === 'visual' ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'"
+                @click="editMode === 'code' ? switchToVisual() : undefined">
+                <Eye class="w-3 h-3" /> 可视化
+              </button>
+              <button
+                class="flex items-center gap-1 px-2 py-1 rounded text-xs transition-colors"
+                :class="editMode === 'code' ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'"
+                @click="editMode === 'visual' ? switchToCode() : undefined">
+                <Code class="w-3 h-3" /> 代码
+              </button>
+            </div>
+          </div>
         </DialogHeader>
 
-        <div class="space-y-4 py-2">
+        <div v-if="editMode === 'visual'" class="space-y-4 py-2">
           <!-- Task type -->
           <div class="space-y-2">
             <Label>任务类型</Label>
@@ -301,8 +453,8 @@ const cronDescription = computed(() => editCron.value ? describeCron(editCron.va
           <!-- Group IDs -->
           <div class="space-y-2">
             <Label>目标群号</Label>
-            <Input v-model="editGroupIds" placeholder="输入群号，多个用逗号分隔" />
-            <p class="text-xs text-muted-foreground">支持多个群号，用逗号分隔，如：123456, 789012</p>
+            <Input v-model="editGroupIds" placeholder="输入 all 表示所有启用群，或群号用逗号分隔" />
+            <p class="text-xs text-muted-foreground">输入 <code class="bg-muted px-1 rounded">all</code> 发送到所有已启用群，或输入群号如 123456, 789012</p>
           </div>
 
           <!-- Single task fields -->
@@ -330,16 +482,6 @@ const cronDescription = computed(() => editCron.value ? describeCron(editCron.va
                   </SelectContent>
                 </Select>
               </div>
-            </div>
-            <div class="space-y-2">
-              <Label>消息内容</Label>
-              <Input v-model="editMessage" placeholder="要发送的消息，支持 {time} 等变量" />
-              <p class="text-xs text-muted-foreground">
-                可用变量：<code class="bg-muted px-1 rounded">{time}</code> 时:分　
-                <code class="bg-muted px-1 rounded">{hour}</code> 时　
-                <code class="bg-muted px-1 rounded">{date}</code> 日期　
-                <code class="bg-muted px-1 rounded">{weekday}</code> 星期
-              </p>
             </div>
           </template>
 
@@ -369,17 +511,46 @@ const cronDescription = computed(() => editCron.value ? describeCron(editCron.va
               <p class="text-xs text-muted-foreground">格式：<code class="bg-muted px-1 rounded">分 时 日 月 周</code></p>
               <p class="text-xs text-muted-foreground"><code class="bg-muted px-1 rounded">*</code> 任意　<code class="bg-muted px-1 rounded">*/N</code> 每N　<code class="bg-muted px-1 rounded">1,3,5</code> 列举　<code class="bg-muted px-1 rounded">1-5</code> 范围</p>
             </div>
-            <div class="space-y-2">
-              <Label>消息内容</Label>
-              <Input v-model="editMessage" placeholder="要发送的消息，支持 {time} 等变量" />
-              <p class="text-xs text-muted-foreground">
-                可用变量：<code class="bg-muted px-1 rounded">{time}</code> 时:分　
-                <code class="bg-muted px-1 rounded">{hour}</code> 时　
-                <code class="bg-muted px-1 rounded">{date}</code> 日期　
-                <code class="bg-muted px-1 rounded">{weekday}</code> 星期
-              </p>
-            </div>
           </template>
+
+          <!-- Messages (shared between single & cron) -->
+          <div class="space-y-2">
+            <div class="flex items-center justify-between">
+              <Label>消息内容</Label>
+              <span v-if="editMessages.length > 1" class="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-500 font-medium">
+                {{ editMessages.length }} 条随机
+              </span>
+            </div>
+            <div class="space-y-2">
+              <div v-for="(_, mi) in editMessages" :key="mi" class="flex items-center gap-2">
+                <Input v-model="editMessages[mi]" :placeholder="`消息 ${mi + 1}`" class="flex-1" />
+                <Button v-if="editMessages.length > 1" variant="ghost" size="sm" class="h-8 w-8 p-0 shrink-0 text-destructive"
+                  @click="removeMessage(mi)">
+                  <Trash2 class="w-3.5 h-3.5" />
+                </Button>
+              </div>
+            </div>
+            <div class="flex items-center gap-2">
+              <Button variant="outline" size="sm" @click="addMessage">
+                <Plus class="w-3.5 h-3.5 mr-1" /> 添加随机消息
+              </Button>
+            </div>
+            <p class="text-xs text-muted-foreground">{{ TEMPLATE_VARS }}</p>
+            <p v-if="editMessages.length > 1" class="text-xs text-muted-foreground">多条消息时，每次触发随机选取一条发送</p>
+          </div>
+        </div>
+
+        <!-- Code mode -->
+        <div v-else class="space-y-2 py-2">
+          <textarea
+            v-model="editCode"
+            class="w-full min-h-[300px] rounded-md border bg-muted/50 p-3 font-mono text-sm resize-y focus:outline-none focus:ring-2 focus:ring-ring"
+            placeholder="粘贴 JSON 格式的定时任务配置..."
+            spellcheck="false"
+            @input="codeError = ''"
+          />
+          <p v-if="codeError" class="text-xs text-destructive">{{ codeError }}</p>
+          <p class="text-xs text-muted-foreground">{{ TEMPLATE_VARS }}</p>
         </div>
 
         <DialogFooter>

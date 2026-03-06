@@ -538,7 +538,7 @@ interface PluginConfigItem {
 
 | editor 值 | 说明 |
 |-----------|------|
-| `scheduled-messages` | 定时消息可视化编辑器，支持单次定时和整点报时两种模式 |
+| `scheduled-messages` | 定时消息可视化编辑器，支持单次定时和 Cron 表达式两种模式，支持多群广播（`all` 表示所有启用群）、多条随机消息、可视化/代码双模式切换 |
 
 示例：
 

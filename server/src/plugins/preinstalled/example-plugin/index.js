@@ -19,6 +19,38 @@ import { CronExpressionParser } from 'cron-parser';
 const repeatTracker = new Map();
 const lastCronSent = new Map();
 
+/** 解析任务中的群列表，支持 "all" → 获取所有启用群 */
+async function resolveGroupIds(context, rawGroupIds) {
+  if (!rawGroupIds.includes('all')) {
+    return rawGroupIds.filter(id => typeof id === 'number');
+  }
+  try {
+    const rawGroups = await context.callApi('get_group_list');
+    if (!Array.isArray(rawGroups)) return [];
+    const basic = context.getBotConfig('basic');
+    const mode = basic?.groupFilterMode ?? 'none';
+    const filterList = basic?.groupFilterList ?? [];
+    return rawGroups
+      .map(g => Number(g.group_id))
+      .filter(gid => {
+        if (mode === 'whitelist') return filterList.includes(gid);
+        if (mode === 'blacklist') return !filterList.includes(gid);
+        return true;
+      });
+  } catch (err) {
+    context.logger.warn(`获取群列表失败: ${err.message || err}`);
+    return [];
+  }
+}
+
+/** 从任务中获取消息文本（支持 messages 数组随机选取） */
+function pickTaskMessage(task) {
+  if (Array.isArray(task.messages) && task.messages.length > 0) {
+    return task.messages[Math.floor(Math.random() * task.messages.length)];
+  }
+  return task.message || null;
+}
+
 const WEEKDAY_NAMES = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
 
 function renderTemplate(msg) {
@@ -61,7 +93,7 @@ export default {
       context.logger.debug('示例插件心跳');
     }, 60000);
 
-    context.setInterval(() => {
+    context.setInterval(async () => {
       const enableScheduledMsg = context.getConfig('enableScheduledMsg') ?? false;
       if (!enableScheduledMsg) return;
       try {
@@ -73,24 +105,42 @@ export default {
         const minute = now.getMinutes();
         const nowMinKey = Math.floor(Date.now() / 60000);
 
+        // 缓存本轮 "all" 群列表解析结果，避免重复调 API
+        let cachedAllGroups = null;
+
         for (let i = 0; i < tasks.length; i++) {
           const task = tasks[i];
-          const groupIds = Array.isArray(task.group_ids) ? task.group_ids : task.group_id ? [task.group_id] : [];
-          if (groupIds.length === 0) continue;
+          const rawGroupIds = Array.isArray(task.group_ids) ? task.group_ids : task.group_id ? [task.group_id] : [];
+          if (rawGroupIds.length === 0) continue;
 
           const sentKey = `${i}`;
           if (lastCronSent.get(sentKey) === nowMinKey) continue;
 
+          const msgText = pickTaskMessage(task);
+          if (!msgText) continue;
+
           let shouldSend = false;
-          if (task.type === 'cron' && task.cron && task.message) {
+          if (task.type === 'cron' && task.cron) {
             shouldSend = matchesCron(task.cron);
-          } else if (task.hour === hour && task.minute === minute && task.message) {
+          } else if (task.hour === hour && task.minute === minute) {
             shouldSend = true;
           }
 
           if (shouldSend) {
             lastCronSent.set(sentKey, nowMinKey);
-            const msg = renderTemplate(task.message);
+            const msg = renderTemplate(msgText);
+
+            // 解析目标群（支持 "all" → 所有启用群）
+            let groupIds;
+            if (rawGroupIds.includes('all')) {
+              if (cachedAllGroups === null) {
+                cachedAllGroups = await resolveGroupIds(context, rawGroupIds);
+              }
+              groupIds = cachedAllGroups;
+            } else {
+              groupIds = rawGroupIds.filter(id => typeof id === 'number');
+            }
+
             for (const gid of groupIds) {
               context.sendMessage('group', gid, msg);
             }
